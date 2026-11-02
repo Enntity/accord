@@ -44,7 +44,8 @@ test('registered external container stops before restoration/regrant after coord
   await stop(h.server,'SIGKILL');await stop(h.driver,'SIGKILL');await delay(h.leaderMs+50);await h.startDriver(driverPort);await h.startServer(port);
   await delay(500);assert.equal(child.exitCode,null);assert.equal(child.signalCode,null);assert.notEqual((await b.reservation(rb.id)).state,'running');assert.equal(restored,false);
   await assert.rejects(a.collaborate('workload-launch',{id:ra.id,key:'stale',workload}));
-  engine='replacement-engine';blockStop=false;await delay(400);assert.notEqual((await b.reservation(rb.id)).state,'running');assert.equal(child.exitCode,null);
+  engine='replacement-engine';await delay(400);blockStop=false;await delay(400);// An attempt already past the identity check must finish first.
+  assert.notEqual((await b.reservation(rb.id)).state,'running');assert.equal(child.exitCode,null);
   engine='fixture-engine';await eventually(async()=>(await b.reservation(rb.id)).state==='running');
   assert(child.exitCode!==null||child.signalCode!==null);assert.equal(restored,true);assert(log.indexOf('old-process-absent')<log.indexOf('restored'));
   await b.release(rb.id);await eventually(async()=>(await b.reservation(rb.id)).state==='released');
