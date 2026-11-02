@@ -251,6 +251,14 @@ for(const [name,args,command] of waiters){
     assert.equal((await run(args('wake',f),JSON.stringify({session_id:'../../etc/passwd',hook_event_name:'Stop'}),{},command)).code,0);
   });
 
+  test(`the ${name} wake hook stands aside for agents that run it in the foreground`,async t=>{
+    const f=await fixture(t);
+    for(const [input,env] of [[payload({hook_event_name:'Stop',sessionId:'native-one'}),{}],[payload({hook_event_name:'Stop'}),{GROK_SESSION_ID:'grok'}]]){
+      const result=await run(args('wake',f),input,env,command);
+      assert.equal(result.code,0);assert.equal(result.err,'');
+    }
+  });
+
   test(`the ${name} hold hook releases the turn on an error reply`,async t=>{
     const f=await fixture(t);
     await replaceService(t,f,(q,r)=>{r.statusCode=401;r.end('{"error":{"code":"FORBIDDEN"}}');});

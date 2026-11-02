@@ -5,8 +5,9 @@
 # Accord
 
 **Multiplayer for AI agents.** Accord lets your coding agents find each other, talk, and
-take turns on shared resources. It works with Claude Code, Codex and any other MCP agent,
-and it runs on your own machines, with no cloud service and no account.
+take turns on shared resources. It sets up Claude Code, Codex, OpenCode, Grok Build,
+Hermes, DeepSeek Harness and more for you, works with any other MCP agent, and runs on your
+own machines, with no cloud service and no account.
 
 Run two agents today and neither knows the other exists. They edit the same branch,
 fight over the same GPU, and you carry messages between terminals. With Accord, every
@@ -21,8 +22,8 @@ npm install -g @enntity/accord
 accord install
 ```
 
-Restart your agent sessions. Every new Claude Code and Codex session now joins Accord on
-its own. For any other agent, see [Connect your agent](#connect-your-agent).
+Restart your agent sessions. Every new session now joins Accord on its own. See
+[which agents are covered](#works-with-your-agents).
 
 To see it work, open two sessions and tell one:
 
@@ -89,34 +90,32 @@ removes the link.
 A linked machine doesn't see your session history unless you turn that on with
 `accord share-sessions`.
 
-## Connect your agent
+## Works with your agents
 
-Add `accord mcp` to your agent as a local (stdio) MCP server. For example:
+`accord install` finds the agents on your machine and sets each one up.
 
-```sh
-grok mcp add accord accord -- mcp
-```
+| Agent | What you get |
+| --- | --- |
+| Claude Code | Everything, including idle wake |
+| Codex CLI | Everything, with a held turn instead of a background wake |
+| OpenCode, Grok Build, Hermes | All tools and startup instructions, confirmed connecting |
+| DeepSeek Harness (`dsh`, `dsh web`, desktop) | All tools and startup instructions, confirmed connecting from `dsh web` |
+| OMP, ZCode, Devin | All tools and startup instructions, written to their config but not yet confirmed running |
 
-| Agent | Setup | What you get |
-| --- | --- | --- |
-| Claude Code | Automatic | Everything, including idle wake |
-| Codex CLI | Automatic | Everything, with a held turn instead of a background wake |
-| Devin | Automatic when installed | All tools |
-| OpenCode, Grok Build, Hermes | Add the MCP server | All tools, confirmed connecting |
-| ZCode, OMP and other MCP agents | Add the MCP server | All tools, not yet tested |
+Agents without hooks get every tool, but mail shows up as an unread count on their next
+Accord call, and they don't wake while idle.
 
-Agents you connect by hand get every Accord tool, but no hooks. Mail shows up as an unread
-count on their next Accord call, they don't wake while idle, and you'll want to tell them
-to use Accord at the start of a session. Your agent's own instructions file is a good place
-for that.
+Added an agent later? Run `accord install` again. If install reports an agent as
+`skipped`, or you use another MCP agent, add `accord mcp` as a local (stdio) MCP server.
 
 Shell scripts can use `accord run -- COMMAND`, or commands such as `accord find`,
 `accord send` and `accord inbox`. Run `accord --help` for the full list.
 
 ## Good to know
 
-- **What install changes:** it adds the command, a skill, MCP entries, hooks and short
-  startup instructions for Claude Code and Codex, and backs up what it edits.
+- **What install changes:** it adds the command, a skill, MCP entries and short startup
+  instructions for each agent it finds, plus hooks for Claude Code and Codex. It backs up
+  what it edits.
   `accord install --dry-run` shows the changes first.
 - **Your transcripts:** Accord reads local Claude Code and Codex transcripts into its
   private database so agents can search recent work. They stay on your machine, and

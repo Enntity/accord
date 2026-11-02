@@ -34,7 +34,9 @@ fast)
   ;;
 wake)
   # Claude runs this in the background after a turn and wakes on exit 2.
-  case $prefix in *'"agent_id"'*) exit 0 ;; esac
+  # Grok and ZCode can load Claude's hooks but would run this one in the foreground.
+  case $prefix in *'"agent_id"'*|*'"sessionId"'*) exit 0 ;; esac
+  [ -z "$GROK_SESSION_ID" ] || exit 0
   { [ -n "$id" ] && command -v curl >/dev/null 2>&1; } || exit 0
   while kill -0 "$PPID" 2>/dev/null; do
     if result=$(poll ''); then

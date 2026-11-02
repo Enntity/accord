@@ -19,7 +19,8 @@ outside the fixture suite:
 | Managed process groups stay held until confirmed absent after a crash | macOS, Linux |
 | Docker and systemd workloads are stopped before a reservation is regranted | Two Linux hosts |
 | An idle session wakes on a peer message and handles it unprompted | Claude Code |
-| Connects over MCP stdio and lists Accord's tools, without a model turn | OpenCode, Grok Build, Hermes |
+| Installed config connects and lists Accord's tools, without a model turn | OpenCode, Grok Build, Hermes |
+| Installed config starts Accord's MCP server, without a model turn | DeepSeek Harness (`dsh web`) |
 
 ## Not yet exercised on real systems
 
@@ -27,6 +28,9 @@ outside the fixture suite:
 - A wake on Windows. The Windows waiter runs in CI, without a real harness.
 - Automatic tunnel restoration on real hosts, which was proven between containers.
 - Capacity pools on a live fleet.
+- OMP and ZCode, whose config is written but which have not been run against Accord. Devin
+  has only its registration fixture here.
+- A full agent turn through any client other than Claude Code and Codex.
 - The Unix socket, link proof and session sharing on real hosts. All three are tested
   against real services with fixtures.
 

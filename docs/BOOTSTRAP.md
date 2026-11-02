@@ -188,6 +188,13 @@ events and driver audit in `evidence/bootstrap.json` when it runs and removes te
 
 ## Install options
 
+`accord install` sets up Claude Code and Codex, plus every other agent it finds: OpenCode,
+Grok Build, OMP, Hermes, ZCode, DeepSeek Harness and Devin. `--clients a,b` picks them
+yourself. Each agent gets its MCP entry and startup instructions in its own config, with a
+backup. An agent whose config Accord cannot safely edit is reported as `skipped`, and the
+rest continue. Only Claude Code and Codex get hooks. DeepSeek Harness uses a home-level
+`cordis.patch.yml`, so one entry reaches `dsh`, `dsh web` and the desktop app.
+
 No npm runtime dependencies are required. `accord install --dry-run` previews the
 changes. Use `--no-start` for a custom supervisor, and `--clients ''` for a host
 with no Codex or Claude integration. Add `~/.local/bin` to your shell PATH if needed;

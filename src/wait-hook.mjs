@@ -22,7 +22,8 @@ async function poll({source,data},id,extra={}) {
 export async function waitHook({mode,source,data,input,parent=process.ppid}) {
   const id=/^[a-zA-Z0-9._:-]+$/.test(input?.session_id??'')?input.session_id:'';
   if(mode==='wake'){
-    if(!id||input.agent_id)return {code:0};
+    // Grok and ZCode can load Claude's hooks but would run this one in the foreground.
+    if(!id||input.agent_id||input.sessionId||process.env.GROK_SESSION_ID)return {code:0};
     while(alive(parent)){
       const result=await poll({source,data},id);
       if(result?.wake)return {code:2,err:reminder};
