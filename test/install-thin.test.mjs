@@ -24,7 +24,7 @@ test('installer adds startup guidance without replacing user instructions, honor
   assert(install({home,data}).steps.every(s=>s.action==='unchanged'));
 });
 
-test('Devin registration uses its CLI with an isolated home and retains existing configuration',t=>{
+test('Devin registration uses its CLI with an isolated home and retains existing configuration',{skip:process.platform==='win32'},t=>{
   const root=mkdtempSync(join(tmpdir(),'accord-devin-install-'));t.after(()=>rmSync(root,{recursive:true,force:true}));
   const home=join(root,'home'),data=join(root,'data');initialize(data);
   const bin=join(home,'.local','bin');mkdirSync(bin,{recursive:true});

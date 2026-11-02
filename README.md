@@ -1,215 +1,151 @@
+<p align="center">
+  <img src="docs/assets/banner.png" alt="Accord: multiplayer for AI agents" width="100%">
+</p>
+
 # Accord
 
-A small local service that helps agents find each other, exchange messages, and
-share resources. It runs on its own, with no cloud account or model provider. Each
-host keeps its own SQLite state. Linked hosts communicate over SSH.
+**Multiplayer for AI agents.** Accord lets your coding agents find each other, talk, and
+take turns on shared resources. It works with Claude Code, Codex and any other MCP agent,
+and it runs on your own machines, with no cloud service and no account.
 
-## Install
+Run two agents today and neither knows the other exists. They edit the same branch,
+fight over the same GPU, and you carry messages between terminals. With Accord, every
+session joins automatically, so they can sort it out themselves.
 
-Requires Node.js 22.16+ and, for host linking, OpenSSH.
+## Get started
+
+You need Node.js 22.16 or newer.
 
 ```sh
 npm install -g @enntity/accord
 accord install
 ```
 
-That installs the command, skill, MCP registrations, context hooks, and short startup instructions
-for Codex and Claude Code, then starts a user service. Existing instructions and
-settings are preserved with backups. Restart existing agent sessions. New sessions
-are instructed to join Accord, publish their activity, check for collaborators and
-messages, and reserve resources before using them.
+Restart your agent sessions. Every new Claude Code and Codex session now joins Accord on
+its own. For any other agent, see [Connect your agent](#connect-your-agent).
 
-Pending mail adds only `inboxPending: N` to ordinary authenticated Accord responses.
-Claude and Codex hooks can also put up to three new messages into the next model
-turn after a tool completes. An idle Claude Code session wakes when a direct message
-or a queued reservation grant arrives, so agents wait without polling and without
-spending tokens. A Codex turn that declared `state: waiting` stays open for up to nine
-minutes and continues the same way. Wakes carry fixed text, never peer content, and
-each conversation gets six per hour (`ACCORD_WAKE_PER_HOUR`; `0` turns them off).
-A routine tool boundary costs about 8 ms and no tokens. Messages remain pending until
-the agent handles them with `accord_read`. Codex may require review in `/hooks` before
-enabling newly installed definitions. Existing disabled-hook and trust settings are
-preserved. See [message delivery](docs/MESSAGE-DELIVERY.md).
+To see it work, open two sessions and tell one:
 
-From a checkout, run `node src/cli.mjs install` instead. It keeps using that checkout
-and Node executable; a package installation uses its installed package directory.
+> Ask the other session what it's working on.
 
-No npm runtime dependencies are required. `accord install --dry-run` previews the
-changes. Use `--no-start` for a custom supervisor, and `--clients ''` for a host
-with no Codex or Claude integration. Add `~/.local/bin` to your shell PATH if needed;
-MCP uses absolute paths. `accord doctor` checks the local service. The browser board
-is at `http://127.0.0.1:8787`; use the local admin token file shown by `accord up`.
-Credentials are held in memory by the board, not browser storage.
+If you use Codex, approve the new hooks in `/hooks` the first time. Run `accord doctor`
+any time to check the service.
 
-On macOS and Linux, `accord install` starts a user service. On Windows, run `accord up`
-under your own supervisor: there is no service registration or POSIX process control.
+## What your agents can do
 
-## Web mission control
+| | |
+| --- | --- |
+| **Find each other** | Each session says what it's working on, so agents can check for overlap before they start. |
+| **Talk** | Messages are durable. They wait in the recipient's inbox until they're handled, even across restarts. |
+| **Wake each other** | A message wakes an idle Claude Code session, so nobody has to poll or relay. |
+| **Take turns** | Agents reserve a repo, a GPU or anything else you name. The first in line gets it, and the rest queue. |
+| **Work across machines** | Link your machines over SSH with one command. |
 
-The standalone web UI brings sessions, questions, messages, resources, telemetry,
-and overseer check-ins into one responsive workspace. Search session history,
-reply across linked hosts, and see ownership and recovery without leaving the
-browser. It supports keyboard shortcuts, light/dark themes, and optional
-notifications while the tab is open. See [the web guide](docs/WEB.md) for
-permissions, browser behavior, and recovery boundaries.
+You can watch all of it on the local board at <http://127.0.0.1:8787>. Sign in with the
+token in `~/.local/share/accord/admin.token`.
 
-## What agents get
+## Built to stay out of the way
 
-- **Join and announce:** a session address, capabilities, location, and current activity.
-- **Find:** search participants across explicitly linked hosts. Offline and stale
-  observations remain visible as such.
-- **Send and receive:** durable direct messages and notifications, pending until
-  marked read. Queued, delivered, read, and acted upon are different facts.
-- **Reserve:** a FIFO queue per resource, a renewable lease, and release. No task
-  definition, checkpoint, expected output, or result receipt is required.
+- **Almost no tokens.** The everyday tool list is under 1,000 tokens, and a join reply is
+  capped at 4 KiB.
+- **Waiting is free.** An idle agent spends nothing until a message or its turn arrives.
+- **Fast.** A routine tool call gains about 8 ms and no tokens.
+- **Safe by default.** Peer messages are treated as untrusted data, a wake never carries
+  peer text, and each conversation gets six wakes an hour.
+- **No dependencies.** Each machine keeps its own SQLite database. There's no server to
+  run beyond a small local service, which `accord install` starts for you.
 
-The MCP tool list holds the daily loop in under 1,000 tokens; `accord_more` reaches
-jobs, reports, questions, telemetry and workloads on demand. Any MCP client can run `accord mcp`. Shell-only
-agents can use `accord run -- COMMAND`, or maintain a session explicitly:
+## Share a resource
 
-```sh
-accord session open --label reviewer
-accord announce --label reviewer --activity 'Reviewing the API' --capabilities review
-accord find --query API
-accord send --to HOST_ID/SESSION_ID --text 'I can review the patch.' --key review-offer
-accord inbox --wait-ms 20000
-accord read --id DELIVERY_ID
-accord session close
-```
-
-Use a separate `--session-file` for each concurrent shell agent. The installer
-supports Codex and Claude Code directly; other harnesses need the skill/MCP
-integration or launcher. Installation cannot force a model to follow instructions
-or wake a closed conversation. Everywhere else, `accord inbox --wait-ms` blocks for
-up to an hour at no token cost and returns as soon as mail lands.
-
-## Connect another host
-
-Install and start Accord on both hosts, then:
-
-```sh
-accord connect my-linux-host
-```
-
-Use an existing SSH alias with working noninteractive authentication and a known
-host key. The command establishes both loopback forwards, pins each Accord host's
-identity, and pairs scoped host-link credentials through SSH. No credentials go
-into agent prompts or command arguments. A linked host can see activity lines and
-resources and can reserve your registered resources. It cannot read your session
-history unless you run `accord share-sessions --host AUTHORITY` here; `--off` stops it. `accord disconnect my-linux-host` removes
-the pairing; its result reports whether the remote side was also reachable for
-removal. The service restores dropped tunnels by itself, including after sleep or a
-reboot, backing off per host; it needs keys usable without a prompt, as `connect`
-does. Connections are direct, not a transitive mesh.
-
-## Register resources
-
-For a cooperative agreement, a manifest needs only a name and asset identifier:
+Name the thing your agents should take turns on. Save this as `resource.json`:
 
 ```json
 {"schema":1,"id":"repository","asset":"repo:my-project","plugin":"cooperative"}
 ```
 
+Then register it:
+
 ```sh
 accord resource register --file resource.json
-accord reserve --resource repository --purpose 'Editing the API' --key edit-api
-accord reservation --id RESERVATION_ID
-accord release --id RESERVATION_ID
 ```
 
-Cooperative resources do not stop external processes or enforce device access.
-For controlled workloads, use the `posix-process-group` plugin and a registered
-executable/argument manifest. See [the process driver](docs/PROCESS-DRIVER.md).
-Managed reservations remain held through expiry, crashes, and recovery until the
-old process group is confirmed absent. No new owner is admitted on a timeout alone.
+Agents now reserve `repository` before they touch it. This kind of reservation is an
+agreement between cooperating agents. To have Accord run a workload and confirm it has
+stopped before the next agent starts, see [managed processes](docs/PROCESS-DRIVER.md) and
+[Docker and systemd workloads](docs/EXTERNAL-WORKLOADS.md).
 
-External Docker containers and systemd supervisors can attach to the same grant;
-see [external workload registration and recovery](docs/EXTERNAL-WORKLOADS.md).
-Accord stops these before the resource's provider restores it and before another
-agent gets the resource. An unreachable host keeps ownership held.
+## Connect another machine
 
-Add `"capacity": N` (2 to 32) to a cooperative or process manifest to register a pool.
-Managed providers can't be pooled, because a provider has one workload per registration. Reserve the pool's
-name to get the next free slot, first come first served. Slots `name-0` to `name-(N-1)`
-are ordinary resources, so fencing and recovery stay per slot. Each physical asset must
-have one authoritative host. Multi-host atomic reservations, GPU isolation, and
-automatic vendor installation are not implemented.
-
-## Verify
+Install Accord on both machines, then use any SSH host that connects without a prompt:
 
 ```sh
-npm run verify
+accord connect my-server
 ```
 
-The suite includes durable messaging, cross-host discovery, reservation queues,
-installer preservation, process crashes, stale-owner rejection, and recovery demos.
-The [thin collaboration contract](docs/THIN-COLLABORATION.md) explains interfaces and
-limits. Tests use isolated CPU workloads and temporary databases. Live SSH and
-model-client tests require explicit opt-in. [Qualification](docs/QUALIFICATION.md)
-lists what has run on real systems and what has not.
+Agents on both machines can now find and message each other and reserve each other's
+resources. Dropped connections come back by themselves. `accord disconnect my-server`
+removes the link.
 
-## Host telemetry
+A linked machine doesn't see your session history unless you turn that on with
+`accord share-sessions`.
 
-`accord telemetry` reads live CPU, memory, GPU, temperatures and other available
-sensors. `accord machine` reads hardware metadata. Add `--host AUTHORITY` to query
-a linked host through its daemon. Samples use short in-memory caches and create
-no coordination events. See [the telemetry API](docs/telemetry.md).
+## Connect your agent
 
-## Shared session backplane
+Add `accord mcp` to your agent as a local (stdio) MCP server. For example:
 
-Accord reads your local Codex and Claude Code transcripts into its private database,
-so agents and the board can search recent work. Secrets are redacted on a best-effort
-basis before storage. Turn this off per source with `accord privacy --source codex --on`.
+```sh
+grok mcp add accord accord -- mcp
+```
 
-It provides portable session observations, bounded redacted history,
-full-text search, extractive or optional model summaries, jobs, human questions,
-and a built-in overseer. The overseer checks quiet work and sustained resource
-idleness, sends durable check-ins and never releases resources on a heuristic.
-See [methods, setup, boundaries and qualification](docs/SESSION-BACKPLANE.md).
+| Agent | Setup | What you get |
+| --- | --- | --- |
+| Claude Code | Automatic | Everything, including idle wake |
+| Codex CLI | Automatic | Everything, with a held turn instead of a background wake |
+| Devin | Automatic when installed | All tools |
+| OpenCode, Grok Build, Hermes | Add the MCP server | All tools, confirmed connecting |
+| ZCode, OMP and other MCP agents | Add the MCP server | All tools, not yet tested |
 
-### Coordination latency
+Agents you connect by hand get every Accord tool, but no hooks. Mail shows up as an unread
+count on their next Accord call, they don't wake while idle, and you'll want to tell them
+to use Accord at the start of a session. Your agent's own instructions file is a good place
+for that.
 
-Join responses are capped at 4 KiB and `find` at 8 KiB, with recent collaborators
-and small resource and inbox previews. Full history stays behind search, board, resources and inbox
-methods. Internal Codex guardian sessions are hidden using native provenance;
-ordinary agents and reviewers remain discoverable.
+Shell scripts can use `accord run -- COMMAND`, or commands such as `accord find`,
+`accord send` and `accord inbox`. Run `accord --help` for the full list.
 
-Admission limits count pending work rather than completed journal history.
-Retry records remain durable, so cleanup never makes an old effect replayable.
-This removes lifetime row-count shutdowns; it does not make retained history use
-constant disk space.
+## Good to know
 
-Ordinary sessions have no time limit. Their identity, mailbox, and ability to
-publish progress survive long tasks, inactivity, sleep, and daemon restarts.
-Heartbeats describe presence; agents do not need to renew a session. Explicit
-closure still ends access. Integrations can request an explicit `ttlMs` when
-they deliberately need a time-limited credential.
+- **What install changes:** it adds the command, a skill, MCP entries, hooks and short
+  startup instructions for Claude Code and Codex, and backs up what it edits.
+  `accord install --dry-run` shows the changes first.
+- **Your transcripts:** Accord reads local Claude Code and Codex transcripts into its
+  private database so agents can search recent work. They stay on your machine, and
+  secrets are redacted on a best-effort basis. `accord privacy --source codex --on` stops
+  this for one source.
+- **Codex:** there's no background wake, so a Codex turn that says it's waiting stays open
+  for up to nine minutes instead. This is tested against the hook contract, but not yet on
+  a real Codex session.
+- **Windows:** run `accord up` under your own supervisor. Service install, managed
+  processes and the private local socket are macOS and Linux only.
+- **Agents stay in charge:** Accord tells an agent what to do at startup, but it can't
+  force a model to follow along or wake a closed application.
 
-Resource reservations retain their separate bounded leases and recovery rules.
-A durable session never extends a lease or revives an old grant.
+## Learn more
 
-Start with `accord_bootstrap({label, activity, key})` to join and publish current
-work in one call, before launching long-running tools or subagents. Optional
-`location` and `capabilities` make that work discoverable. No-argument bootstrap
-remains supported. Retain the key and payload when retrying an ambiguous result.
+- [Install options and how joining works](docs/BOOTSTRAP.md)
+- [Message delivery and wakes](docs/MESSAGE-DELIVERY.md)
+- [The web board](docs/WEB.md)
+- [Sessions, search, jobs and the overseer](docs/SESSION-BACKPLANE.md)
+- [Host telemetry](docs/telemetry.md)
+- [HTTP API](docs/API.md)
+- [What has been tested on real systems](docs/QUALIFICATION.md)
+- [Security model and known limits](SECURITY.md)
 
-Clients can queue tool calls behind running work. Combining startup calls removes a
-scheduling step; it cannot bypass queues or approvals in the client.
+Prefer a native app? [Tessera](https://github.com/Enntity/tessera) is a macOS mission
+control built on Accord.
 
-MCP calls run independently: an inbox long-poll does not block announcements,
-discovery, or protocol pings. Each bridge allows up to 32 concurrent tool calls;
-excess calls receive `MCP_BUSY` immediately and are not executed. HTTP requests
-retain their bounded timeouts. A failed enrollment can be retried on the same
-bridge with the same enrollment key.
+To work on Accord itself, run `npm run verify` from a checkout.
 
-The MCP process writes start/finish timing records to stderr, with tool names and
-elapsed milliseconds only. Arguments, credentials, session content, and results
-are excluded. These records measure time inside the bridge; client approval or
-transport delays before the bridge receives a call are outside that measurement.
+## License
 
-Existing MCP processes keep the code loaded when they started. Reconnect the MCP
-client or start a fresh agent session to load an updated bridge. Do not kill an
-active bridge as a performance workaround: closing its session can initiate
-recovery of its leases. The coordinator does not need restarting for bridge-only
-updates. If coordination is unavailable, continue work that needs no shared
-resource; never interpret a timeout as permission to use a resource.
+[MIT](LICENSE)

@@ -53,6 +53,8 @@ export async function harness({ leaderMs = 1500, dir = null } = {}) {
     processes.push(proc); const ready = await message(proc, 'ready'); h.driver = proc; h.driverUrl = ready.url; h.driverInstance = ready.instance; return proc;
   };
   h.startServer = async (port = 0, driverUrl = h.driverUrl) => {
+    // Windows ends a process without its shutdown handler, so the old lease has to lapse.
+    if (h.server && process.platform === 'win32') await delay(leaderMs + 250);
     const proc = launch(new URL('../src/cli.mjs', import.meta.url), ['serve','--data',data,'--port',String(port),'--driver-url',driverUrl,'--leader-ms',String(leaderMs)]);
     processes.push(proc); const ready = await message(proc, 'ready'); h.server = proc; h.url = ready.url; return proc;
   };

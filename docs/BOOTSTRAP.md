@@ -185,3 +185,98 @@ revocation pending and cannot acquire. After driver restart and confirmed
 revocation, it gets a higher generation, resumes the checkpoint, writes the
 artifact, and finishes. The old grant is refused. The proof records coordinator
 events and driver audit in `evidence/bootstrap.json` when it runs and removes temporary state.
+
+## Install options
+
+No npm runtime dependencies are required. `accord install --dry-run` previews the
+changes. Use `--no-start` for a custom supervisor, and `--clients ''` for a host
+with no Codex or Claude integration. Add `~/.local/bin` to your shell PATH if needed;
+MCP uses absolute paths. `accord doctor` checks the local service. The browser board
+is at `http://127.0.0.1:8787`; use the local admin token file shown by `accord up`.
+Credentials are held in memory by the board, not browser storage.
+
+## The agent loop
+
+- **Join and announce:** a session address, capabilities, location, and current activity.
+- **Find:** search participants across explicitly linked hosts. Offline and stale
+  observations remain visible as such.
+- **Send and receive:** durable direct messages and notifications, pending until
+  marked read. Queued, delivered, read, and acted upon are different facts.
+- **Reserve:** a FIFO queue per resource, a renewable lease, and release. No task
+  definition, checkpoint, expected output, or result receipt is required.
+
+The MCP tool list holds the daily loop in under 1,000 tokens; `accord_more` reaches
+jobs, reports, questions, telemetry and workloads on demand. Any MCP client can run `accord mcp`. Shell-only
+agents can use `accord run -- COMMAND`, or maintain a session explicitly:
+
+```sh
+accord session open --label reviewer
+accord announce --label reviewer --activity 'Reviewing the API' --capabilities review
+accord find --query API
+accord send --to HOST_ID/SESSION_ID --text 'I can review the patch.' --key review-offer
+accord inbox --wait-ms 20000
+accord read --id DELIVERY_ID
+accord session close
+```
+
+Use a separate `--session-file` for each concurrent shell agent. The installer
+supports Codex and Claude Code directly; other harnesses need the skill/MCP
+integration or launcher. Installation cannot force a model to follow instructions
+or wake a closed conversation. Everywhere else, `accord inbox --wait-ms` blocks for
+up to an hour at no token cost and returns as soon as mail lands.
+
+## Resource pools
+
+Add `"capacity": N` (2 to 32) to a cooperative or process manifest to register a pool.
+Managed providers can't be pooled, because a provider has one workload per registration. Reserve the pool's
+name to get the next free slot, first come first served. Slots `name-0` to `name-(N-1)`
+are ordinary resources, so fencing and recovery stay per slot. Each physical asset must
+have one authoritative host. Multi-host atomic reservations, GPU isolation, and
+automatic vendor installation are not implemented.
+
+## Sessions and latency
+
+Join responses are capped at 4 KiB and `find` at 8 KiB, with recent collaborators
+and small resource and inbox previews. Full history stays behind search, board, resources and inbox
+methods. Internal Codex guardian sessions are hidden using native provenance;
+ordinary agents and reviewers remain discoverable.
+
+Admission limits count pending work rather than completed journal history.
+Retry records remain durable, so cleanup never makes an old effect replayable.
+This removes lifetime row-count shutdowns; it does not make retained history use
+constant disk space.
+
+Ordinary sessions have no time limit. Their identity, mailbox, and ability to
+publish progress survive long tasks, inactivity, sleep, and daemon restarts.
+Heartbeats describe presence; agents do not need to renew a session. Explicit
+closure still ends access. Integrations can request an explicit `ttlMs` when
+they deliberately need a time-limited credential.
+
+Resource reservations retain their separate bounded leases and recovery rules.
+A durable session never extends a lease or revives an old grant.
+
+Start with `accord_bootstrap({label, activity, key})` to join and publish current
+work in one call, before launching long-running tools or subagents. Optional
+`location` and `capabilities` make that work discoverable. No-argument bootstrap
+remains supported. Retain the key and payload when retrying an ambiguous result.
+
+Clients can queue tool calls behind running work. Combining startup calls removes a
+scheduling step; it cannot bypass queues or approvals in the client.
+
+MCP calls run independently: an inbox long-poll does not block announcements,
+discovery, or protocol pings. Each bridge allows up to 32 concurrent tool calls;
+excess calls receive `MCP_BUSY` immediately and are not executed. HTTP requests
+retain their bounded timeouts. A failed enrollment can be retried on the same
+bridge with the same enrollment key.
+
+The MCP process writes start/finish timing records to stderr, with tool names and
+elapsed milliseconds only. Arguments, credentials, session content, and results
+are excluded. These records measure time inside the bridge; client approval or
+transport delays before the bridge receives a call are outside that measurement.
+
+Existing MCP processes keep the code loaded when they started. Reconnect the MCP
+client or start a fresh agent session to load an updated bridge. Do not kill an
+active bridge as a performance workaround: closing its session can initiate
+recovery of its leases. The coordinator does not need restarting for bridge-only
+updates. If coordination is unavailable, continue work that needs no shared
+resource; never interpret a timeout as permission to use a resource.

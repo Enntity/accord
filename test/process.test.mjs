@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import test from 'node:test';
+import nodeTest from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { harness, eventually, delay, stop } from './helpers.mjs';
 import { request, hash } from '../src/common.mjs';
 import { groupExists } from '../src/plugins/posix-process-group.mjs';
+const test=process.platform==='win32'?nodeTest.skip:nodeTest;// POSIX process groups only.
 const fixture=fileURLToPath(new URL('./fixtures/workload.mjs',import.meta.url));
 const key=()=>randomUUID();
 async function setup(t,mode='tree'){

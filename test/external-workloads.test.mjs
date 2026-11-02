@@ -11,7 +11,7 @@ import { createHttp, listen, readBody, hash, request } from '../src/common.mjs';
 import { ManagedDriver } from '../src/managed-driver.mjs';
 import { WorkloadGuard } from '../src/workload-guard.mjs';
 
-test('registered external container stops before restoration/regrant after coordinator AND driver crash', {timeout:40000}, async t=>{
+test('registered external container stops before restoration/regrant after coordinator AND driver crash', {timeout:40000,skip:process.platform==='win32'}, async t=>{
   const h=await harness();t.after(()=>h.close());
   const container='a'.repeat(64),socket=join(h.data,'docker.sock');let child,labels={},started=false,blockStop=true,engine='fixture-engine',restored=false;const log=[];
   const docker=http.createServer(async(req,res)=>{

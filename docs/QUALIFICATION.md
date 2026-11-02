@@ -19,6 +19,7 @@ outside the fixture suite:
 | Managed process groups stay held until confirmed absent after a crash | macOS, Linux |
 | Docker and systemd workloads are stopped before a reservation is regranted | Two Linux hosts |
 | An idle session wakes on a peer message and handles it unprompted | Claude Code |
+| Connects over MCP stdio and lists Accord's tools, without a model turn | OpenCode, Grok Build, Hermes |
 
 ## Not yet exercised on real systems
 

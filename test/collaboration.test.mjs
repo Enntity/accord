@@ -48,7 +48,7 @@ test('linked hosts discover, message both ways, retain outgoing mail offline, an
   assert.equal(recovered.from,aa);await delay(1200);assert.equal((await cb.inbox()).messages.length,1);
 });
 
-test('thin remote reservations queue FIFO and stop old process before regrant after driver crash',async t=>{
+test('thin remote reservations queue FIFO and stop old process before regrant after driver crash',{skip:process.platform==='win32'},async t=>{
   const a=await harness(),b=await harness(),groups=[];
   t.after(async()=>{for(const pid of groups)try{process.kill(-pid,'SIGKILL');}catch{}await a.close();await b.close();});
   const {bb}=await link(a,b),ca=a.client('agent-a'),cb=b.client('agent-b');await announce(ca,'one');await announce(cb,'two');

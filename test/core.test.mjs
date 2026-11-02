@@ -8,7 +8,8 @@ import { ArtifactDriver } from '../src/driver.mjs';
 import { Store } from '../src/store.mjs';
 import { hash } from '../src/common.mjs';
 
-function temporary(t) { const dir=mkdtempSync(join(tmpdir(),'accord-core-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));return dir; }
+// Windows refuses to delete a database a later hook has yet to close.
+function temporary(t) { const dir=mkdtempSync(join(tmpdir(),'accord-core-'));t.after(()=>{try{rmSync(dir,{recursive:true,force:true});}catch(e){if(process.platform!=='win32')throw e;}});return dir; }
 test('driver fences delayed activation, stale credentials and old authority epochs across restart', t=>{
   const file=join(temporary(t),'driver.sqlite');let driver=new ArtifactDriver(file);t.after(()=>driver.close());
   const base={instance:driver.status().instance,authority:'test-authority',epoch:1,generation:1,claimId:'attempt-a',credentialHash:hash('a')};

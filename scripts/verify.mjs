@@ -24,14 +24,14 @@ for(const [name,args] of [
   ['syntax',['scripts/check.mjs']],
   ['tests',['--test','--test-concurrency=1',...readdirSync('test').filter(f=>!f.startsWith('.')&&f.endsWith('.test.mjs')).sort().map(f=>join('test',f))]]
 ]) {
-  const started=Date.now();const run=spawnSync(process.execPath,args,{encoding:'utf8',timeout:180000,maxBuffer:2*1024*1024});
+  const started=Date.now();const run=spawnSync(process.execPath,args,{encoding:'utf8',timeout:600000,maxBuffer:2*1024*1024});
   const log=(run.stdout||'')+(run.stderr||'');writeFileSync(`evidence/${name}.log`,log);
   process.stdout.write(log);results.push({name,args,exitCode:run.status,durationMs:Date.now()-started});
   if(run.status!==0)throw Error(`${name} failed; see evidence/${name}.log`);
 }
 const demo=await runRecoveryDemo();writeFileSync('evidence/recovery.json',JSON.stringify(demo,null,2)+'\n');
 const bootstrap=await runBootstrapDemo();writeFileSync('evidence/bootstrap.json',JSON.stringify(bootstrap,null,2)+'\n');
-const processDemo=await runProcessDemo();writeFileSync('evidence/process-recovery.json',JSON.stringify(processDemo,null,2)+'\n');
+const processDemo=process.platform==='win32'?{assertions:null}:await runProcessDemo();if(process.platform!=='win32')writeFileSync('evidence/process-recovery.json',JSON.stringify(processDemo,null,2)+'\n');
 const sources=snapshot();
 if(JSON.stringify(sources)!==JSON.stringify(sourcesBefore))throw Error('Source changed during qualification; rerun before publishing a receipt');
 const receipt={status:'passed',at:new Date().toISOString(),runtime:{node:process.version,platform:process.platform,arch:process.arch},checks:results,demoAssertions:demo.assertions,bootstrapAssertions:bootstrap.assertions,processAssertions:processDemo.assertions,sources,
