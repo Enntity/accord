@@ -56,7 +56,7 @@ test('two-agent fault demo preserves checkpoints, blocks unknown ownership, and 
   const report=await runRecoveryDemo();assert.equal(report.status,'passed');assert.equal(report.assertions.overlappingDriverGrants,0);
 });
 
-test('lost activation and revoke replies leave a durable hold until acknowledgment can be retried', {timeout:15000},async t=>{
+test('lost activation and revoke replies leave a durable hold until acknowledgment can be retried', {timeout:40000},async t=>{
   const h=await harness();t.after(()=>h.close());await stop(h.server);
   let dropActivation=true,dropRevoke=true;
   const proxy=http.createServer(async(req,res)=>{

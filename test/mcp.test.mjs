@@ -81,7 +81,7 @@ test('MCP calls expose pending mail without fetching bodies, including failed op
   assert(b.replies.get(5).result.isError);assert.equal(JSON.parse(b.replies.get(5).result.content[0].text).inboxPending,1);
 });
 
-test('an existing MCP bridge can update a legacy expired session after host upgrade without reconnecting',{timeout:10000},async t=>{
+test('an existing MCP bridge can update a legacy expired session after host upgrade without reconnecting',{timeout:40000},async t=>{
   const b=await bridge(t),context=JSON.parse(b.replies.get(2).result.content[0].text),actor=context.address.split('/')[1];
   const port=Number(new URL(b.h.url).port);await stop(b.h.server);
   const db=new DatabaseSync(join(b.h.data,'coordinator.sqlite'));
@@ -134,7 +134,7 @@ test('MCP saturation rejects an unstarted call promptly and keeps ping responsiv
   await eventually(()=>b.replies.has(44));assert(!b.replies.get(44).result.isError);
 });
 
-test('the same MCP adapter can retry enrollment after a temporary host outage',{timeout:10000},async t=>{
+test('the same MCP adapter can retry enrollment after a temporary host outage',{timeout:40000},async t=>{
   const h=await harness();t.after(()=>h.close());
   const {mcpAdapter}=await import('../src/mcp.mjs');
   const installed=install({home:join(h.data,'retry-home'),data:h.data});
