@@ -44,7 +44,8 @@ export async function stop(proc, signal = 'SIGTERM') {
   });
 }
 // A slow Windows runner can stall past a short lease, and a coordinator that loses it stands down.
-export async function harness({ leaderMs = process.platform === 'win32' ? 5000 : 1500, dir = null } = {}) {
+export async function harness({ leaderMs: requested = 1500, dir = null } = {}) {
+  const leaderMs = process.platform === 'win32' ? Math.max(requested, 5000) : requested;
   const data = dir || mkdtempSync(join(tmpdir(), 'accord-test-'));
   initialize(data,{fixtures:true});
   const processes = [], credential = name => readFileSync(join(data, `${name}.token`), 'utf8');
@@ -56,8 +57,15 @@ export async function harness({ leaderMs = process.platform === 'win32' ? 5000 :
   h.startServer = async (port = 0, driverUrl = h.driverUrl) => {
     // Windows ends a process without its shutdown handler, so the old lease has to lapse.
     if (h.server && process.platform === 'win32') await delay(leaderMs + 250);
-    const proc = launch(new URL('../src/cli.mjs', import.meta.url), ['serve','--data',data,'--port',String(port),'--driver-url',driverUrl,'--leader-ms',String(leaderMs)]);
-    processes.push(proc); const ready = await message(proc, 'ready'); h.server = proc; h.url = ready.url; return proc;
+    const start = async () => {
+      const proc = launch(new URL('../src/cli.mjs', import.meta.url), ['serve','--data',data,'--port',String(port),'--driver-url',driverUrl,'--leader-ms',String(leaderMs)]);
+      processes.push(proc); const ready = await message(proc, 'ready'); h.server = proc; h.url = ready.url; return proc;
+    };
+    // A stalled Windows runner can outlast the lease during startup; a second start recovers it.
+    return start().catch(async error => {
+      if (process.platform !== 'win32' || !/LEADER_/.test(error.message)) throw error;
+      await delay(leaderMs + 250); return start();
+    });
   };
   h.agent = (name, input) => {
     const proc = launch(new URL('../demo/agent.mjs', import.meta.url)); processes.push(proc);

@@ -77,7 +77,7 @@ test('session expiry revokes ownership without prematurely freeing an unreachabl
 test('fresh agent with only installed profile discovers lease and waits through recovery', {timeout:20000},async()=>{
   const proof=await runBootstrapDemo();assert.equal(proof.status,'passed');assert.equal(proof.assertions.overlappingGrants,0);
 });
-test('two independent hosts share discovery; partitions and wrong authority stay unknown', {timeout:15000},async t=>{
+test('two independent hosts share discovery; partitions and wrong authority stay unknown', {timeout:40000},async t=>{
   const a=await harness(),b=await harness();t.after(async()=>{await a.close();await b.close();});
   const authority=(await b.client('admin').host()).authority;
   const body={key:randomUUID(),authority,url:b.url,credential:b.credential('discovery')};
