@@ -78,10 +78,11 @@ test('an upgraded host keeps sharing with the links it already had',t=>{
   const seed=new Store(file);seed.close();
   const old=new DatabaseSync(file);
   old.exec("ALTER TABLE links DROP COLUMN share_sessions;DELETE FROM migrations WHERE version=13;INSERT INTO links VALUES('peer','http://127.0.0.1:1','o','i');");old.close();
-  const current=new Store(file);t.after(()=>current.close());
+  const current=new Store(file);
   assert.equal(current.db.prepare('SELECT share_sessions s FROM links').get().s,1);
   current.db.exec("INSERT INTO links(authority,url,outbound,inbound_hash) VALUES('new','http://127.0.0.1:2','o2','i2')");
   assert.equal(current.db.prepare("SELECT share_sessions s FROM links WHERE authority='new'").get().s,0);
+  current.close();
 });
 
 test('a credential goes only to a tunnel that proves it holds the link',async t=>{
@@ -90,8 +91,8 @@ test('a credential goes only to a tunnel that proves it holds the link',async t=
   await new Promise(r=>descriptor.listen(0,'127.0.0.1',r));t.after(()=>descriptor.close());
   const c=a.client('admin'),port=descriptor.address().port;
   await assert.doesNotReject(c.collaborate('resources',{},bb));
-  const store=new DatabaseSync(join(a.data,'coordinator.sqlite'));t.after(()=>store.close());
-  store.prepare('UPDATE links SET url=? WHERE authority=?').run(`http://127.0.0.1:${port}`,bb);
+  const store=new DatabaseSync(join(a.data,'coordinator.sqlite'));
+  store.prepare('UPDATE links SET url=? WHERE authority=?').run(`http://127.0.0.1:${port}`,bb);store.close();
   await assert.rejects(c.collaborate('resources',{},bb),{code:'PEER_IDENTITY_CHANGED'});
   assert.ok(squat.hits.length>0);assert.ok(squat.hits.every(h=>!h.includes('accord_')),'no link credential reached it');
 });

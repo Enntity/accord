@@ -43,7 +43,8 @@ export async function stop(proc, signal = 'SIGTERM') {
     proc.once('exit', () => { clearTimeout(timer); resolve(); }); proc.kill(signal);
   });
 }
-export async function harness({ leaderMs = 1500, dir = null } = {}) {
+// A slow Windows runner can stall past a short lease, and a coordinator that loses it stands down.
+export async function harness({ leaderMs = process.platform === 'win32' ? 5000 : 1500, dir = null } = {}) {
   const data = dir || mkdtempSync(join(tmpdir(), 'accord-test-'));
   initialize(data,{fixtures:true});
   const processes = [], credential = name => readFileSync(join(data, `${name}.token`), 'utf8');
