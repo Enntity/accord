@@ -1,0 +1,11 @@
+node_modules/
+.accord/
+*.sqlite*
+*.token
+*.key
+.DS_Store
+coverage/
+
+dist/
+evidence/
+*.tgz

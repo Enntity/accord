@@ -1,0 +1,29 @@
+name: ownership and recovery
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  qualify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node: [22, 24]
+        include:
+          - os: ubuntu-latest
+            node: 22.16.0
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm run verify
+      - name: Install and use the packed release
+        if: runner.os != 'Windows'
+        run: node scripts/qualify-package.mjs "$(npm pack --silent)" evidence/package.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: evidence-${{ matrix.os }}-node${{ matrix.node }}
+          path: evidence/

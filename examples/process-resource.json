@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "id": "build-slot",
+  "asset": "host-local:build-slot",
+  "plugin": "posix-process-group",
+  "command": ["/usr/bin/printf", "process result"],
+  "cwd": "/tmp",
+  "terminationGraceMs": 200
+}
