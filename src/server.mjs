@@ -94,7 +94,6 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
   }catch{/* Keep ownership reconciliation independent of observation failures. */}finally{monitoring=false;}},10000);
   const mailTimer=setInterval(()=>{if(!closed&&!unhealthy)void collaboration.flush().catch(()=>{});},1000);
   memory.start();
-  const memoryTimer=setInterval(()=>{if(!closed&&!unhealthy)void memory.scan().catch(()=>{});},memory.config.pollMs);
   function describe(actor, claimId) {
     const claim = store.owned(actor, claimId);
     return { ...claim, task: store.task(claim.task_id), driverUrl,
@@ -419,7 +418,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
   return {
     server, store, reconcile,
     async close() {
-      closed = true; attention.close(); await observationRuntime.close();clearInterval(timer); clearInterval(heartbeat);clearInterval(mailTimer);clearInterval(overseerTimer);clearInterval(memoryTimer);memory.close();
+      closed = true; attention.close(); await observationRuntime.close();clearInterval(timer); clearInterval(heartbeat);clearInterval(mailTimer);clearInterval(overseerTimer);memory.close();
       server.closeAllConnections();
       await new Promise(resolve => server.close(resolve));
       while (busy||collaboration.sending||monitoring||managers.busy) await new Promise(resolve => setTimeout(resolve, 10));

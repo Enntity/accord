@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, readFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../src/store.mjs';
-import { MemoryPanorama, memoryConfig, adapters } from '../src/memory-panorama.mjs';
+import { MemoryPanorama, adapters } from '../src/memory-panorama.mjs';
 import { request } from '../src/common.mjs';
 import { harness, eventually, link } from './helpers.mjs';
 import { randomUUID } from 'node:crypto';
@@ -20,6 +20,8 @@ function fixture(env = {}) {
   writeFileSync(join(zcode, 'long.md'), `---\nname: long\ndescription: ${'x'.repeat(400)}\n---\nbody\n`);
   writeFileSync(join(zcode, 'my-token.md'), '---\nname: hidden\n---\nsecret body\n');
   writeFileSync(join(zcode, 'body-heavy.md'), `---\nname: heavy\ndescription: big body\n---\n${'y'.repeat(17 * 1024)}\n`);
+  writeFileSync(join(zcode, 'leaky.md'), '---\nname: leaky\ndescription: config with sk-ant-synthetic0000000000000 inside\n---\npassword is synthetic_9876543210\n');
+  writeFileSync(join(zcode, 'private.md'), '---\nname: quiet\ntype: project\nscope: private\ndescription: private fact\n---\nprivate body\n');
   const agents = join(root, 'workspace');
   mkdirSync(agents, { recursive: true });
   writeFileSync(join(agents, 'AGENTS.md'), '# Workspace agent guide\n\nDo the right thing.\n');
@@ -27,7 +29,7 @@ function fixture(env = {}) {
   return { root, zcode, agents };
 }
 
-test('adapters index frontmatter, truncate descriptions, and refuse unsafe paths', () => {
+test('adapters index frontmatter, truncate descriptions, redact secrets, and refuse unsafe paths', () => {
   const f = fixture();
   const entries = adapters.zcode(f.zcode);
   const byName = Object.fromEntries(entries.map(e => [e.name, e]));
@@ -37,20 +39,34 @@ test('adapters index frontmatter, truncate descriptions, and refuse unsafe paths
   assert.equal(byName.long.description.length, 200);
   assert.equal(byName.hidden, undefined); // credential-shaped name is never indexed
   assert.ok(!entries.some(e => e.name === 'dangling-alias')); // symlinks are refused
+  assert.ok(byName.leaky.description.includes('[secret]')); // descriptions are redacted
+  assert.ok(!byName.leaky.description.includes('sk-ant-synthetic'));
+  assert.equal(byName.quiet, undefined); // private scope never enters the index
   assert.equal(byName.alpha.type, 'project');
   assert.equal(byName.alpha.scope, 'shared');
   assert.equal(adapters['agents-md']([f.agents]).length, 1);
   assert.equal(adapters['agents-md']([f.agents])[0].type, 'authority');
-  assert.equal(adapters['agents-md']([join(f.root, 'absent')]).length, 0); // missing store is absent, not stale
+  assert.throws(() => adapters['agents-md']([join(f.root, 'absent')]), e => e.code === 'ENOENT'); // the scan layer turns this into "absent" only when nothing was indexed
   rmSync(f.root, { recursive: true, force: true });
 });
 
-function panorama(f, sources = ['zcode', 'agents-md'], env = {}) {
+test('entries are identified by full canonical path, so two roots cannot collide', () => {
+  const f = fixture();
+  const second = join(f.root, 'workspace-2');
+  mkdirSync(second, { recursive: true });
+  writeFileSync(join(second, 'AGENTS.md'), '# Second workspace guide\n');
+  const first = adapters['agents-md']([f.agents]), both = adapters['agents-md']([f.agents, second]);
+  assert.equal(both.length, 2);
+  assert.notEqual(both[0].id, both[1].id);
+  assert.equal(first[0].id, both[0].id); // id is stable per source path
+  rmSync(f.root, { recursive: true, force: true });
+});
+
+function panorama(f, sources = ['zcode', 'agents-md'], config = {}) {
   const store = new Store(join(f.root, 'coordinator.sqlite'));
   store.takeLeadership();
-  const config = { enabled: true, sources, pollMs: 1000, learnings: false,
-    roots: { zcode: f.zcode, 'agents-md': [f.agents], claude: undefined, codex: undefined }, ...env };
-  const p = new MemoryPanorama(store, config);
+  const p = new MemoryPanorama(store, { enabled: true, sources, pollMs: 1000, learnings: false,
+    roots: { zcode: f.zcode, 'agents-md': [f.agents], claude: undefined, codex: undefined }, ...config });
   return { store, p };
 }
 
@@ -72,32 +88,98 @@ test('search is conjunctive, capped, and provenance-carrying; stale entries surv
   const stale = p.list({ query: 'alpha', limit: 20 });
   assert.equal(stale.entries[0].stale, true);
   assert.equal(p.status.sources.zcode.ok, false);
+  // Restoring the same bytes clears the uncertainty on the next completed scan.
+  mkdirSync(f.zcode, { recursive: true });
+  writeFileSync(join(f.zcode, 'alpha.md'), '---\nname: alpha\ntype: project\ndescription: SparkGLM serves Atlas main\n---\nbody\n');
+  await p.scan();
+  const restored = p.list({ query: 'alpha', limit: 20 });
+  assert.equal(restored.entries[0].stale, false);
+  assert.equal(p.status.sources.zcode.ok, true);
   store.close();
   rmSync(f.root, { recursive: true, force: true });
 });
 
-test('read is capped, refuses authority bodies, and goes stale when the body is gone', async () => {
+test('a partially unreadable store is reported stale, not silently emptied', async () => {
+  const f = fixture(), { store, p } = panorama(f, ['zcode']);
+  await p.scan();
+  const before = p.list({ limit: 20 }).entries.length;
+  assert.ok(before >= 6);
+  const sub = join(f.zcode, 'locked'); // a subdirectory inside the indexed store
+  mkdirSync(sub, { recursive: true });
+  writeFileSync(join(sub, 'inside.md'), '---\nname: inside\n---\n');
+  await p.scan();
+  assert.equal(p.list({ limit: 20 }).entries.length, before + 1);
+  chmodSync(sub, 0o000);
+  try {
+    await p.scan();
+    assert.equal(p.status.sources.zcode.ok, false);
+    assert.equal(p.list({ limit: 20 }).entries.length, before + 1); // preserved as stale, not deleted
+    assert.equal(p.list({ limit: 20 }).entries.every(e => e.stale), true);
+  } finally { chmodSync(sub, 0o755); }
+  store.close();
+  rmSync(f.root, { recursive: true, force: true });
+});
+
+test('read is capped, redacted, refuses authority bodies, and revalidates the source', async () => {
   const f = fixture(), { store, p } = panorama(f);
   await p.scan();
   const heavy = p.list({ query: 'heavy' }).entries[0];
   const body = p.read(heavy.id);
   assert.equal(body.body.length, 16 * 1024);
-  assert.equal(readFileSync(f.zcode + '/body-heavy.md').length > 16 * 1024, true);
+  assert.equal(body.truncated, true);
+  assert.equal(readFileSync(join(f.zcode, 'body-heavy.md')).length > 16 * 1024, true);
+  const leaky = p.list({ query: 'leaky' }).entries[0];
+  assert.ok(!p.read(leaky.id).body.includes('sk-ant-synthetic'));
+  assert.ok(p.read(leaky.id).body.includes('[secret]'));
   const authority = p.list({ query: 'agents guide', limit: 20 }).entries[0];
   assert.equal(authority.type, 'authority');
   assert.throws(() => p.read(authority.id), e => e.code === 'AUTHORITY_BODY');
-  rmSync(join(f.zcode, 'body-heavy.md'));
-  assert.throws(() => p.read(heavy.id), e => e.code === 'STALE_ENTRY');
+  // A replaced source (symlink pointing outside) is refused and marks the entry stale.
+  rmSync(join(f.zcode, 'alpha.md'));
+  symlinkSync('/etc/hosts', join(f.zcode, 'alpha.md'));
+  const alpha = p.list({ query: 'alpha', limit: 20 }).entries.find(e => e.name === 'alpha');
+  assert.throws(() => p.read(alpha.id), e => e.code === 'STALE_ENTRY');
+  assert.equal(p.status.sources.zcode.ok, true); // read-time refusal does not fail the whole source
+  assert.equal(p.list({ query: 'alpha', limit: 20 }).entries.find(e => e.name === 'alpha').stale, true);
   store.close();
   rmSync(f.root, { recursive: true, force: true });
 });
 
-test('the entry cap bounds a runaway store', async () => {
+test('private scope is enforced before persistence and drops out when it becomes private', async () => {
+  const f = fixture(), { store, p } = panorama(f);
+  await p.scan();
+  assert.equal(p.list({ query: 'quiet', limit: 20 }).entries.length, 0); // never indexed
+  rmSync(join(f.zcode, 'beta.md'));
+  writeFileSync(join(f.zcode, 'beta.md'), '---\nname: beta\ntype: project\nscope: private\ndescription: now private\n---\n');
+  await p.scan();
+  assert.equal(p.list({ query: 'beta', limit: 20 }).entries.length, 0); // previously indexed, now dropped
+  store.close();
+  rmSync(f.root, { recursive: true, force: true });
+});
+
+test('disabled mode serves nothing and scans nothing', async () => {
+  const f = fixture(), { store, p } = panorama(f, ['zcode', 'agents-md'], { enabled: false });
+  // Persist rows directly, as a previously enabled instance would have.
+  const rows = adapters.zcode(f.zcode).concat(adapters['agents-md']([f.agents]));
+  p.sync('zcode', rows.filter(r => r.source === 'zcode'));
+  p.sync('agents-md', rows.filter(r => r.source === 'agents-md'));
+  await p.scan(); // must be a no-op
+  assert.deepEqual(p.list({ limit: 20 }).entries, []);
+  assert.throws(() => p.read('anything'), e => e.code === 'DISABLED');
+  assert.deepEqual(p.learnings(), []);
+  assert.equal(p.status.enabled, false);
+  store.close();
+  rmSync(f.root, { recursive: true, force: true });
+});
+
+test('an overflowing store is reported stale instead of silently truncated', async () => {
   const f = fixture();
   for (let i = 0; i < 2050; i++) writeFileSync(join(f.zcode, `bulk-${String(i).padStart(4, '0')}.md`), `---\nname: bulk-${i}\ndescription: filler\n---\n`);
-  const { store, p } = panorama(f);
+  const { store, p } = panorama(f, ['zcode']);
   await p.scan();
-  assert.equal(p.status.sources.zcode.entries, 2000);
+  assert.equal(p.status.sources.zcode.ok, false);
+  assert.equal(p.status.sources.zcode.error, 'ENTRY_CAP');
+  assert.equal(p.list({ limit: 20 }).entries.every(e => e.stale), true);
   store.close();
   rmSync(f.root, { recursive: true, force: true });
 });
