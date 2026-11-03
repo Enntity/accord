@@ -69,7 +69,11 @@ arbitrary terminal typing is implied.
 `reserve` creates a queue entry owned by the authenticated session. Every resource
 has capacity one; a pool is a group of such resources sharing one FIFO queue. Its queue survives restart; cancellation and queue expiry
 remove a waiting request. A running reservation defaults to a five-minute lease,
-renewable up to eight hours total. Session close, expiry, and coordinator restart
+renewable for as long as the resource allows. A `managed-http` manifest may declare
+`maxOwnershipMs` (one minute to 30 days) or `allowIndefinite: true`; a resource that
+declares neither allows eight hours, and the catalog reports the effective
+`maxOwnershipMs` (`null` when indefinite). Re-registering the same resource may change
+only these two fields. Session close, expiry, and coordinator restart
 initiate recovery. A reservation that lost ownership is terminal; it does not
 silently reacquire another generation. A fresh request joins the queue again.
 

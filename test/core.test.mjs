@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ArtifactDriver } from '../src/driver.mjs';
 import { Store } from '../src/store.mjs';
+import { Collaboration } from '../src/collaboration.mjs';
 import { hash } from '../src/common.mjs';
 
 // Windows refuses to delete a database a later hook has yet to close.
@@ -92,7 +93,7 @@ test('v1 database migrates additively without changing authority, claim generati
   const current=new Store(file);t.after(()=>current.close());
   assert.equal(current.authority,'original-host');assert.equal(current.claim('claim').generation,7);
   assert.equal(current.task('task').checkpoint,'durable checkpoint');assert.equal(current.authenticate('old-secret').id,'old-worker');
-  assert.equal(current.db.prepare('SELECT count(*) AS n FROM migrations').get().n,14);
+  assert.equal(current.db.prepare('SELECT count(*) AS n FROM migrations').get().n,15);
   current.takeLeadership();assert.equal(current.claim('claim').state,'revoking');assert.equal(current.board().resource.holders.length,1);
 });
 
@@ -101,7 +102,7 @@ test('v9 native bindings migrate into mailbox aliases without changing prior che
   const seed=new Store(file);seed.provision('prior-session','secret','worker');
   seed.db.prepare('INSERT INTO session_bindings VALUES(?,?,?)').run('claude','native','prior-session');
   const checksums=seed.db.prepare('SELECT * FROM migrations WHERE version<=9').all();seed.close();
-  const old=new DatabaseSync(file);old.exec('DROP TABLE session_mailbox_aliases; ALTER TABLE session_views DROP COLUMN parent_session; DROP TABLE resource_pools; ALTER TABLE reservations DROP COLUMN pool; ALTER TABLE links DROP COLUMN share_sessions; DROP TABLE memory_entries; DELETE FROM migrations WHERE version>=10');old.close();
+  const old=new DatabaseSync(file);old.exec('DROP TABLE session_mailbox_aliases; ALTER TABLE session_views DROP COLUMN parent_session; DROP TABLE resource_pools; ALTER TABLE reservations DROP COLUMN pool; ALTER TABLE links DROP COLUMN share_sessions; DROP TABLE memory_entries; ALTER TABLE resource_bindings DROP COLUMN max_ownership_ms; ALTER TABLE resource_bindings DROP COLUMN allow_indefinite; DELETE FROM migrations WHERE version>=10');old.close();
   const current=new Store(file);t.after(()=>current.close());
   assert.deepEqual(current.db.prepare('SELECT * FROM migrations WHERE version<=9').all(),checksums);
   assert.deepEqual({...current.db.prepare('SELECT * FROM session_mailbox_aliases').get()},{source:'claude',external_id:'native',actor:'prior-session'});
@@ -124,4 +125,24 @@ test('published v4 checksums and durable inbox outbox survive the awareness upgr
  const checksums=old.prepare('SELECT * FROM migrations').all();old.close();
  const current=new Store(file);t.after(()=>current.close());assert.equal(current.authority,'v4-host');assert.deepEqual(current.db.prepare('SELECT * FROM migrations WHERE version<=4').all(),checksums);
  assert.equal(current.db.prepare('SELECT state FROM message_outbox').get().state,'queued');assert.equal(current.db.prepare('SELECT label FROM participants').get().label,'Worker');assert.equal(current.authenticate('fixture').id,'holder');
+});
+test('reservation ownership ends at the resource\'s declared maximum, never for an indefinite resource, and at eight hours by default',t=>{
+  const dir=temporary(t);let now=0;const store=new Store(join(dir,'store.sqlite'),{now:()=>now,leaderMs:1e12});const collaboration=new Collaboration(store,join(dir,'store.sqlite'));
+  t.after(()=>{collaboration.close();store.close();});store.provision('admin','admin-secret','admin');store.provision('a','secret','worker');store.takeLeadership();
+  const admin={id:'admin',role:'admin'},actor={id:'a',role:'worker'},hour=3600000;
+  const bind=(id,ownership={})=>store.registerResource(admin,{key:`bind:${id}:${JSON.stringify(ownership)}`},{id,instance:id,plugin:'managed-http',asset:`fixture:${id}`,enforcement:'test',...ownership});
+  bind('pair',{maxOwnershipMs:12*hour});bind('drafter',{maxOwnershipMs:12*hour,allowIndefinite:true});bind('plain');
+  const hold=id=>{now=0;const {id:reservationId}=collaboration.reserve(actor,{key:`reserve:${id}`,resource:id});
+    const {claimId}=store.acquire(actor,{key:`take:${id}`,taskId:store.db.prepare('SELECT task_id FROM reservations WHERE id=?').get(reservationId).task_id,leaseMs:300000});store.activated(claimId);return claimId;};
+  const holdUntil=(claimId,until,leaseMs=300000)=>{for(;now+leaseMs<=until;now+=leaseMs*0.8)store.renew(actor,claimId,{key:`renew:${claimId}:${now}`,leaseMs});};
+  const limited=e=>e.code==='ATTEMPT_LIMIT';
+  const pair=hold('pair');holdUntil(pair,12*hour);assert(store.claim(pair).deadline>8*hour);
+  assert.throws(()=>store.renew(actor,pair,{key:'past-pair',leaseMs:300000}),limited);
+  const drafter=hold('drafter');holdUntil(drafter,30*hour);assert(store.claim(drafter).deadline>12*hour);
+  const plain=hold('plain');holdUntil(plain,8*hour);assert.throws(()=>store.renew(actor,plain,{key:'past-plain',leaseMs:300000}),limited);
+  assert.deepEqual(['pair','drafter','plain'].map(id=>store.ownershipLimit(id)),[12*hour,null,8*hour]);
+  bind('pair');assert.equal(store.ownershipLimit('pair'),8*hour,'a later registration that declares nothing falls back to the default');
+  const {taskId}=store.submit(actor,{key:'task',title:'bounded',input:'a',expectedHash:hash('A')});
+  now=0;const task=store.acquire(actor,{key:'take-task',taskId,leaseMs:30000});store.activated(task.claimId);holdUntil(task.claimId,300000,30000);
+  assert.throws(()=>store.renew(actor,task.claimId,{key:'task-renew',leaseMs:30000}),limited,'tasks keep their five-minute limit');
 });
