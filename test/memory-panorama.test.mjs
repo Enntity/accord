@@ -5,7 +5,7 @@ import { chmodSync, mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../src/store.mjs';
-import { MemoryPanorama, adapters } from '../src/memory-panorama.mjs';
+import { MemoryPanorama, adapters, memoryConfig } from '../src/memory-panorama.mjs';
 import { request } from '../src/common.mjs';
 import { harness, eventually, link } from './helpers.mjs';
 import { randomUUID } from 'node:crypto';
@@ -14,7 +14,7 @@ function fixture(env = {}) {
   const root = mkdtempSync(join(tmpdir(), 'accord-mem-'));
   const zcode = join(root, 'projects', 'proj', 'memory');
   mkdirSync(zcode, { recursive: true });
-  writeFileSync(join(zcode, 'alpha.md'), '---\nname: alpha\ntype: project\ndescription: SparkGLM serves Atlas main\n---\nbody\n');
+  writeFileSync(join(zcode, 'alpha.md'), '---\nname: alpha\ntype: project\ndescription: Model gateway serves the main branch\n---\nbody\n');
   writeFileSync(join(zcode, 'beta.md'), '---\nname: beta\ntype: project\n---\n# First heading wins as description\n');
   writeFileSync(join(zcode, 'MEMORY.md'), '- [Index line](alpha.md) — index entries are facts too\n');
   writeFileSync(join(zcode, 'long.md'), `---\nname: long\ndescription: ${'x'.repeat(400)}\n---\nbody\n`);
@@ -33,7 +33,7 @@ test('adapters index frontmatter, truncate descriptions, redact secrets, and ref
   const f = fixture();
   const entries = adapters.zcode(f.zcode);
   const byName = Object.fromEntries(entries.map(e => [e.name, e]));
-  assert.equal(byName.alpha.description, 'SparkGLM serves Atlas main');
+  assert.equal(byName.alpha.description, 'Model gateway serves the main branch');
   assert.equal(byName.beta.description, 'First heading wins as description');
   assert.ok(byName.MEMORY.description.length > 0);
   assert.equal(byName.long.description.length, 200);
@@ -46,7 +46,9 @@ test('adapters index frontmatter, truncate descriptions, redact secrets, and ref
   assert.equal(byName.alpha.scope, 'shared');
   assert.equal(adapters['agents-md']([f.agents]).length, 1);
   assert.equal(adapters['agents-md']([f.agents])[0].type, 'authority');
-  assert.throws(() => adapters['agents-md']([join(f.root, 'absent')]), e => e.code === 'ENOENT'); // the scan layer turns this into "absent" only when nothing was indexed
+  // One missing root never hides the others.
+  assert.deepEqual(adapters['agents-md']([join(f.root, 'absent'), f.agents]).map(e => e.type), ['authority']);
+  assert.deepEqual(adapters['agents-md']([join(f.root, 'absent')]), []);
   rmSync(f.root, { recursive: true, force: true });
 });
 
@@ -76,10 +78,10 @@ test('search is conjunctive, capped, and provenance-carrying; stale entries surv
   const all = p.list({ limit: 20 });
   assert.ok(all.entries.length >= 6);
   assert(all.entries.every(e => e.source.host === store.authority));
-  const hits = p.list({ query: 'sparkglm atlas', limit: 20 });
+  const hits = p.list({ query: 'gateway main', limit: 20 });
   assert.equal(hits.entries.length, 1);
   assert.equal(hits.entries[0].name, 'alpha');
-  assert.equal(p.list({ query: 'sparkglm nothing', limit: 20 }).entries.length, 0);
+  assert.equal(p.list({ query: 'gateway nothing', limit: 20 }).entries.length, 0);
   assert.equal(p.list({ query: '', limit: 2 }).entries.length, 2);
   assert.throws(() => p.list({ limit: 21 }), /limit/);
   // A vanished store leaves entries stale rather than erased.
@@ -90,7 +92,7 @@ test('search is conjunctive, capped, and provenance-carrying; stale entries surv
   assert.equal(p.status.sources.zcode.ok, false);
   // Restoring the same bytes clears the uncertainty on the next completed scan.
   mkdirSync(f.zcode, { recursive: true });
-  writeFileSync(join(f.zcode, 'alpha.md'), '---\nname: alpha\ntype: project\ndescription: SparkGLM serves Atlas main\n---\nbody\n');
+  writeFileSync(join(f.zcode, 'alpha.md'), '---\nname: alpha\ntype: project\ndescription: Model gateway serves the main branch\n---\nbody\n');
   await p.scan();
   const restored = p.list({ query: 'alpha', limit: 20 });
   assert.equal(restored.entries[0].stale, false);
@@ -158,7 +160,7 @@ test('private scope is enforced before persistence and drops out when it becomes
 });
 
 test('disabled mode serves nothing and scans nothing', async () => {
-  const f = fixture(), { store, p } = panorama(f, ['zcode', 'agents-md'], { enabled: false });
+  const f = fixture(), { store, p } = panorama(f, ['zcode', 'agents-md'], { enabled: false, learnings: true });
   // Persist rows directly, as a previously enabled instance would have.
   const rows = adapters.zcode(f.zcode).concat(adapters['agents-md']([f.agents]));
   p.sync('zcode', rows.filter(r => r.source === 'zcode'));
@@ -203,6 +205,7 @@ test('accord_recall spans linked hosts; memory-read fetches the owning body; sha
     if (!(name in prior)) prior[name] = process.env[name];
     if (value === undefined) delete process.env[name]; else process.env[name] = value;
   };
+  setEnv('ACCORD_MEMORY', 'on');
   setEnv('ACCORD_MEMORY_SOURCES', 'zcode,agents-md');
   setEnv('ACCORD_MEMORY_ZCODE', f.zcode);
   setEnv('ACCORD_MEMORY_AGENTS_MD', f.agents);
@@ -245,6 +248,7 @@ test('the join digest stays off by default', { timeout: 30000 }, async t => {
     if (!(name in prior)) prior[name] = process.env[name];
     if (value === undefined) delete process.env[name]; else process.env[name] = value;
   };
+  setEnv('ACCORD_MEMORY', 'on');
   setEnv('ACCORD_MEMORY_SOURCES', 'zcode');
   setEnv('ACCORD_MEMORY_ZCODE', f.zcode);
   setEnv('ACCORD_MEMORY_POLL_MS', '250');
@@ -267,6 +271,7 @@ test('the join digest carries bounded learnings when enabled', { timeout: 30000 
     if (!(name in prior)) prior[name] = process.env[name];
     if (value === undefined) delete process.env[name]; else process.env[name] = value;
   };
+  setEnv('ACCORD_MEMORY', 'on');
   setEnv('ACCORD_MEMORY_SOURCES', 'zcode');
   setEnv('ACCORD_MEMORY_ZCODE', f.zcode);
   setEnv('ACCORD_MEMORY_POLL_MS', '250');
@@ -284,4 +289,58 @@ test('the join digest carries bounded learnings when enabled', { timeout: 30000 
   const view = await request(h.url, h.credential('admin'), '/v1/bootstrap');
   assert(view.learnings.length <= 5);
   assert(view.learnings.every(l => l.name && l.description && l.source));
+});
+
+test('session bookkeeping never stands in for a description', () => {
+  const root = mkdtempSync(join(tmpdir(), 'accord-mem-codex-'));
+  writeFileSync(join(root, 'summary.md'), 'thread_id: 1\nupdated_at: 2026-01-01\nrollout_path: /home/a/sessions/r.jsonl\ncwd: /home/a/project\n\n# Faster startup by caching the index\n');
+  assert.equal(adapters.codex(root)[0].description, 'Faster startup by caching the index');
+  rmSync(root, { recursive: true, force: true });
+});
+
+test('Claude memory is read from each project memory folder and nothing beside it', () => {
+  const root = mkdtempSync(join(tmpdir(), 'accord-mem-claude-'));
+  const memory = join(root, 'project-a', 'memory'), results = join(root, 'project-a', 'session-1', 'tool-results');
+  mkdirSync(memory, { recursive: true }); mkdirSync(results, { recursive: true });
+  writeFileSync(join(memory, 'deploy-steps.md'), '---\nname: deploy-steps\ndescription: Deploys need a manual dispatch\n---\nbody\n');
+  writeFileSync(join(results, 'output.txt'), 'tool output is not memory\n');
+  writeFileSync(join(root, 'project-a', 'session-1.jsonl'), '{}\n');
+  writeFileSync(join(root, 'project-a', 'session-1', 'plan.md'), '# A session file, not a memory\n');
+  writeFileSync(join(root, 'project-a', 'notes.txt'), 'loose project file\n');
+  mkdirSync(join(root, 'project-b'));
+  assert.deepEqual(adapters.claude(root).map(e => e.name), ['deploy-steps']);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test('a folder swapped for a link after indexing is refused at read', async () => {
+  const f = fixture(), { store, p } = panorama(f, ['zcode']);
+  const sub = join(f.zcode, 'notes');
+  mkdirSync(sub); writeFileSync(join(sub, 'inside.md'), '---\nname: inside\ndescription: nested fact\n---\nsame bytes\n');
+  await p.scan();
+  const inside = p.list({ query: 'nested' }).entries[0];
+  assert.equal(p.read(inside.id).name, 'inside');
+  const elsewhere = join(f.root, 'elsewhere');
+  mkdirSync(elsewhere); writeFileSync(join(elsewhere, 'inside.md'), readFileSync(join(sub, 'inside.md')));
+  rmSync(sub, { recursive: true }); symlinkSync(elsewhere, sub);
+  assert.throws(() => p.read(inside.id), e => e.code === 'STALE_ENTRY');
+  store.close();
+  rmSync(f.root, { recursive: true, force: true });
+});
+
+test('the panorama is off until the operator turns it on, and off clears what an earlier run indexed', () => {
+  assert.equal(memoryConfig({}).enabled, false);
+  assert.equal(memoryConfig({ ACCORD_MEMORY: 'on' }).enabled, true);
+  const f = fixture(), { store, p } = panorama(f, ['zcode'], { enabled: false });
+  p.sync('zcode', adapters.zcode(f.zcode));
+  p.start();
+  assert.equal(store.db.prepare('SELECT count(*) n FROM memory_entries').get().n, 0);
+  store.close();
+  rmSync(f.root, { recursive: true, force: true });
+});
+
+test('a memory whose name is not a slug is indexed under its file name', () => {
+  const f = fixture();
+  writeFileSync(join(f.zcode, 'two-words.md'), '---\nname: Two words\ndescription: named in prose\n---\nbody\n');
+  assert.equal(adapters.zcode(f.zcode).find(e => e.description === 'named in prose').name, 'two-words');
+  rmSync(f.root, { recursive: true, force: true });
 });

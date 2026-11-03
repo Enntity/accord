@@ -2,9 +2,9 @@
 // The memory panorama indexes each harness's own memory store, read-only.
 // Descriptions and provenance are served; bodies stay on their host and are
 // fetched only by an explicit read. Native stores are never written.
-import { lstatSync, openSync, readdirSync, readSync, closeSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, openSync, readdirSync, readSync, realpathSync, closeSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { extname, join, relative, resolve } from 'node:path';
+import { dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
 import { hash, integer, requireThat, text } from './common.mjs';
 import { redact } from './session-awareness.mjs';
 
@@ -29,7 +29,7 @@ function describe(meta, rest) {
   if (!description) for (const line of rest.split(/\r?\n/)) {
     const candidate = line.replace(/^#+\s*/, '').replace(/^[-*]\s*/, '').trim();
     // Session bookkeeping lines are identifiers, not knowledge.
-    if (!candidate || /^(thread_id|session_id|run_id|id|created_at|updated_at)\s*[:=]/i.test(candidate)) continue;
+    if (!candidate || /^(thread_id|session_id|run_id|id|created_at|updated_at|rollout_path|cwd)\s*[:=]/i.test(candidate)) continue;
     description = candidate; break;
   }
   return redact(description.replace(/\s+/g, ' ').trim()).slice(0, DESCRIPTION_MAX);
@@ -44,15 +44,25 @@ function readWindow(path, max) {
   return buffer;
 }
 
+// No link between the root and the file: every folder resolves to where its path says.
+function contained(root, path) {
+  const rel = relative(root, dirname(path));
+  if (rel.startsWith('..') || isAbsolute(rel)) return false;
+  try { return realpathSync(dirname(path)) === join(realpathSync(root), rel); } catch { return false; }
+}
+
 function fileEntry(source, root, path, type) {
   if (FORBIDDEN.test(path)) throw Object.assign(new Error('Refused: credential-shaped path'), { code: 'REFUSED_PATH' });
   const info = lstatSync(path);
-  if (info.isSymbolicLink()) throw Object.assign(new Error('Refused: symlink'), { code: 'REFUSED_SYMLINK' });
+  if (info.isSymbolicLink() || !contained(root, path)) throw Object.assign(new Error('Refused: symlink'), { code: 'REFUSED_SYMLINK' });
   requireThat(info.isFile(), 'NOT_A_FILE', 'Indexable paths must be regular files');
   const raw = readWindow(path, HASH_WINDOW);
   const { meta, rest } = frontmatter(raw.toString('utf8'));
-  const name = String(meta.name ?? relative(root, path).replace(/\.md$/, '').split('/').at(-1)).trim();
-  requireThat(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/.test(name), 'INVALID_NAME', 'Memory names must be simple slugs');
+  // A name written as prose falls back to the file name.
+  const slug = value => /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/.test(value);
+  const declared = String(meta.name ?? '').trim(), file = relative(root, path).replace(/\.md$/, '').split('/').at(-1);
+  const name = slug(declared) ? declared : file;
+  requireThat(slug(name), 'INVALID_NAME', 'Memory names must be simple slugs');
   return {
     // Full canonical path in the id, so two configured roots can never collide.
     id: hash(`${source}:${resolve(path)}`),
@@ -85,7 +95,7 @@ function markdownFiles(root, depth = 1) {
 
 export const DEFAULT_ROOTS = {
   zcode: join(homedir(), '.enntity-zcode', 'cli', 'memories', 'projects'),
-  claude: join(homedir(), '.claude', 'memories'),
+  claude: join(homedir(), '.claude', 'projects'),
   codex: join(homedir(), '.codex', 'memories'),
 };
 
@@ -97,16 +107,23 @@ export const adapters = {
   zcode: root => shared(markdownFiles(root ?? DEFAULT_ROOTS.zcode, 3)
     .filter(p => p.endsWith('.md') || p.endsWith('.markdown'))
     .map(path => fileEntry('zcode', root ?? DEFAULT_ROOTS.zcode, path, 'project'))),
-  claude: root => shared(markdownFiles(root ?? DEFAULT_ROOTS.claude, 2)
-    .map(path => fileEntry('claude', root ?? DEFAULT_ROOTS.claude, path, 'project'))),
+  // Claude keeps memory in projects/<project>/memory beside transcripts and tool output,
+  // so only those folders are read.
+  claude: (root = DEFAULT_ROOTS.claude) => shared(readdirSync(root, { withFileTypes: true })
+    .filter(item => item.isDirectory() && existsSync(join(root, item.name, 'memory')))
+    .flatMap(item => markdownFiles(join(root, item.name, 'memory'), 0).filter(p => p.endsWith('.md')))
+    .map(path => fileEntry('claude', root, path, 'project'))),
   codex: root => shared(markdownFiles(root ?? DEFAULT_ROOTS.codex, 1)
     .map(path => fileEntry('codex', root ?? DEFAULT_ROOTS.codex, path, 'project'))),
-  'agents-md': roots => shared(roots.flatMap(root =>
-    [fileEntry('agents-md', root, join(root, 'AGENTS.md'), 'authority')])),
+  // A root without an AGENTS.md is skipped; it never hides the others.
+  'agents-md': roots => shared(roots.flatMap(root => existsSync(join(root, 'AGENTS.md'))
+    ? [fileEntry('agents-md', root, join(root, 'AGENTS.md'), 'authority')] : [])),
 };
 
+// Off by default: memory files can hold free-text secrets no redaction reliably catches,
+// so indexing them is the operator's choice.
 export function memoryConfig(env = process.env) {
-  const enabled = env.ACCORD_MEMORY !== 'off';
+  const enabled = env.ACCORD_MEMORY === 'on';
   const sources = (env.ACCORD_MEMORY_SOURCES ?? 'zcode,claude,codex,agents-md').split(',').map(s => s.trim()).filter(Boolean);
   const pollMs = Math.min(600000, Math.max(250, Number(env.ACCORD_MEMORY_POLL_MS ?? 30000) || 30000));
   const roots = {
@@ -130,7 +147,10 @@ export class MemoryPanorama {
     this.timer = null;
   }
   start() {
-    if (!this.config.enabled) return;
+    if (!this.config.enabled) {
+      this.store.mutate(() => this.store.db.prepare('DELETE FROM memory_entries').run());
+      return;
+    }
     const tick = () => { if (!this.scanning) void this.scan().catch(() => {}); };
     this.timer = setInterval(tick, this.config.pollMs);
     this.timer.unref?.();
@@ -210,8 +230,8 @@ export class MemoryPanorama {
     // file with the indexed identity, or the entry is stale.
     let body, truncated = false;
     try {
-      const info = lstatSync(row.path);
-      if (info.isSymbolicLink() || !info.isFile() || FORBIDDEN.test(row.path))
+      const info = lstatSync(row.path), roots = [this.config.roots[row.source] ?? DEFAULT_ROOTS[row.source]].flat().filter(Boolean);
+      if (info.isSymbolicLink() || !info.isFile() || FORBIDDEN.test(row.path) || !roots.some(root => contained(root, row.path)))
         throw Object.assign(new Error('Entry source changed'), { code: 'SOURCE_CHANGED' });
       const raw = readWindow(row.path, HASH_WINDOW);
       requireThat(hash(raw) === row.hash, 'SOURCE_CHANGED', 'The entry changed since it was indexed', 410);
@@ -227,7 +247,7 @@ export class MemoryPanorama {
   }
 
   learnings() {
-    if (!this.config.learnings) return [];
+    if (!this.config.enabled || !this.config.learnings) return [];
     const rows = this.store.db.prepare("SELECT * FROM memory_entries WHERE stale=0 ORDER BY updated DESC LIMIT ?").all(LEARNINGS_MAX);
     return rows.map(row => ({ name: row.name, type: row.type, description: row.description, updated: row.updated, source: row.source }));
   }

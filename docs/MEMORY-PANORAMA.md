@@ -23,6 +23,9 @@ hosts. Nothing migrates, nothing is rewritten, no harness behavior changes.
 - **Almost no tokens.** The tool is not in the daily tool list; it is reached via
   `accord_more`. Search results are capped lines, not dumps. The join digest is
   capped and skippable.
+- **Off until you turn it on.** Memory files can hold free-text secrets that no
+  redaction reliably catches, so a host indexes nothing until its operator starts
+  Accord with `ACCORD_MEMORY=on`. Turning it off again clears the index.
 
 ## Format contract
 
@@ -31,12 +34,12 @@ An adapter publishes index entries with this fixed shape (`accord.memory-index/v
 ```json
 {
   "id": "sha256(source.path + name)",
-  "name": "sparkglm-on-atlas-main-tp4",
+  "name": "gateway-on-main",
   "type": "project",
-  "description": "SparkGLM serves Atlas-Inf main via PR #321; drafter is Enntity v80",
+  "description": "The model gateway serves the main branch; the old canary is retired",
   "updated": "2026-11-02T15:20:00Z",
   "hash": "sha256 of the file body",
-  "source": {"host": "…", "harness": "zcode", "label": "Codex", "path": "…/memory/sparkglm-on-atlas-main-tp4.md"},
+  "source": {"host": "…", "harness": "zcode", "label": "Reviewer", "path": "…/memory/gateway-on-main.md"},
   "scope": "shared"
 }
 ```
@@ -55,7 +58,7 @@ service on a slow poll (30 s) with hash-based change detection:
 | Adapter | Store | Notes |
 | --- | --- | --- |
 | `zcode` | `~/.enntity-zcode/cli/memories/projects/<proj>/memory/` + `MEMORY.md` | plain markdown, frontmatter |
-| `claude` | Claude Code memory directories and `CLAUDE.md`-family files | same shape |
+| `claude` | `~/.claude/projects/<project>/memory/` only, never the transcripts and tool output beside it | same shape |
 | `codex` | `~/.codex/memories/` | summarized entries; hash the file, index the summary line |
 | `agents-md` | `AGENTS.md` in known project roots | `type: authority` |
 
@@ -64,7 +67,8 @@ Adapter rules:
 1. **Allowlist paths.** Only configured roots are indexed; everything else is
    invisible. Symlinks are refused. Bodies are never read for indexing beyond the
    frontmatter and first description line.
-2. **Isolation.** A store that disappears, is unreadable, or exceeds size caps
+2. **Isolation.** An `AGENTS.md` root without the file is skipped. A store that
+   disappears, is unreadable, or exceeds size caps
    (per source: 2,000 entries) produces a `stale` marker on its entries, not a
    crash. One bad harness cannot degrade the panorama.
 3. **No secrets.** Paths containing credential patterns (`.ssh`, `*.pem`, token
@@ -90,7 +94,7 @@ One new extra tool and one board view. The daily tool list is unchanged.
 
 ## Trust and scope
 
-- Results are labeled: `Jinx (codex, ennspark03) · project · 2d ago`. They are
+- Results are labeled: `Reviewer (codex, build-host) · project · 2d ago`. They are
   information, not instruction. This matches the existing rule that peer messages
   are untrusted data.
 - `private` scope is enforced at the adapter: private entries never appear in any
@@ -113,15 +117,13 @@ One new extra tool and one board view. The daily tool list is unchanged.
 - **No writes, ever.** The service holds read-only handles. If a store file is
   locked by its harness, adapters skip the mtime check that round and retry.
 
-## Rollout
+## Status
 
-1. **Phase 1** — `zcode` and `agents-md` adapters (this Mac), `accord_recall`,
-   board view. Proves the whole path with ~300 lines, no cross-host work.
-2. **Phase 2** — `claude` and `codex` adapters; cross-host recall over existing
-   peer links; join digest behind a config flag.
-3. **Phase 3** (optional, separate) — a shared OKF-style scratch store for facts
-   that are genuinely cross-agent, written through Accord reservations. Only if
-   the read-only panorama proves insufficient.
+Shipped: the `zcode`, `claude`, `codex` and `agents-md` adapters, `accord_recall`,
+`accord_recall_read`, cross-host recall over linked hosts that share sessions, and
+the join digest behind `ACCORD_MEMORY_LEARNINGS=on`. Not built: a shared scratch
+store for facts that are genuinely cross-agent, written through Accord
+reservations. That waits until the read-only panorama proves insufficient.
 
 Out of scope, deliberately: vector retrieval (fused keyword + frontmatter match is
 enough at this scale), auto-harvesting transcripts into memory, cross-store merging
