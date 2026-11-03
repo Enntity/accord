@@ -14,7 +14,8 @@ hosts. Nothing migrates, nothing is rewritten, no harness behavior changes.
   fan out to linked hosts on demand, exactly like `accord_find`. There is no
   replicated memory state, no sync protocol, no new daemon.
 - **Descriptions cross hosts; bodies stay home.** Only the index entry (name,
-  description, type, source, hash) is served remotely. A body is fetched only by
+  description, type, source, hash) is served remotely, and a host checks and caps
+  each entry a peer returns before an agent sees it. A body is fetched only by
   explicit `accord_recall_read` against the owning host, bounded and redacted.
 - **Untrusted with provenance.** A memory entry is untrusted data, like a peer
   message. Every hit carries its source: host, harness, participant label, path,
@@ -67,7 +68,10 @@ Adapter rules:
 1. **Allowlist paths.** Only configured roots are indexed; everything else is
    invisible. Symlinks are refused. Bodies are never read for indexing beyond the
    frontmatter and first description line.
-2. **Isolation.** An `AGENTS.md` root without the file is skipped. A store that
+2. **Isolation.** An `AGENTS.md` root without the file is skipped, and so is a
+   single file Accord refuses (a link, an unusable name) while the rest of its
+   source stays current. Only configured sources are served; one taken out of
+   `ACCORD_MEMORY_SOURCES` is cleared at the next start. A store that
    disappears, is unreadable, or exceeds size caps
    (per source: 2,000 entries) produces a `stale` marker on its entries, not a
    crash. One bad harness cannot degrade the panorama.

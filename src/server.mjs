@@ -11,7 +11,7 @@ import { createHmac } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { plugins,validateResource } from './resource-plugins.mjs';
 import { Collaboration } from './collaboration.mjs';
-import { MemoryPanorama, memoryConfig } from './memory-panorama.mjs';
+import { MemoryPanorama, memoryConfig, peerEntries } from './memory-panorama.mjs';
 import { Attention } from './attention.mjs';
 import { Store } from './store.mjs';
 import { bootstrapView } from './bootstrap-view.mjs';
@@ -155,7 +155,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     const local=memory.list(args), hosts=[];
     const remote=await Promise.all(store.db.prepare('SELECT authority FROM links ORDER BY authority LIMIT 32').all().map(async peer=>{
       try { const result=await collaboration.forward(peer.authority,'memories',args,actor);hosts.push({authority:peer.authority,status:'observed'});
-        return (result.entries??[]).filter(entry=>entry.source?.host===peer.authority); }
+        return peerEntries(result,peer.authority); }
       catch { hosts.push({authority:peer.authority,status:'unknown'});return []; }
     }));
     return {entries:[...local.entries,...remote.flat()].sort((a,b)=>b.updated.localeCompare(a.updated)).slice(0,args.limit??10),hosts,sources:local.sources,lastScan:local.lastScan};

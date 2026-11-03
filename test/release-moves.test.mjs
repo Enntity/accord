@@ -48,6 +48,17 @@ test('a service that dies on its own stops the other first and reports a failure
   for(const port of ports)assert.equal(await bindable(port),true,`port ${port} still held when the supervisor exited`);
 });
 
+test('a service that ignores a stop is killed so the supervisor still exits',{timeout:60000},async t=>{
+  const {up,ports}=await supervisor(t);
+  const children=spawnSync('pgrep',['-P',String(up.pid)],{encoding:'utf8'}).stdout.trim().split('\n').map(Number);
+  const serve=children.find(pid=>spawnSync('ps',['-o','command=','-p',String(pid)],{encoding:'utf8'}).stdout.includes(' serve '));
+  t.after(()=>{try{process.kill(serve,'SIGKILL');}catch{}});
+  process.kill(serve,'SIGSTOP');// A stopped process cannot act on SIGTERM.
+  const started=Date.now();up.kill('SIGTERM');await exited(up);
+  assert.ok(Date.now()-started<20000,'supervisor exited');
+  for(const port of ports)assert.equal(await bindable(port),true,`port ${port} still held when the supervisor exited`);
+});
+
 // Rewrites what install wrote as if it had run from another folder and Node, keeping the
 // manifest true to those files, as an earlier install there would have left it.
 function movedFrom(home,files){

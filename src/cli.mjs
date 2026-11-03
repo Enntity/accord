@@ -230,7 +230,10 @@ try {
       if (!stopping) process.exitCode=1; // Let the service manager restart after an unexpected child exit.
     } finally {
       // Exit only once both have let go of their ports, so a restart never meets a held one.
-      stop(); await Promise.all([driver,service].filter(Boolean).map(exited));
+      // One that ignores the request is killed after five seconds rather than hanging the stop.
+      stop();
+      const children=[driver,service].filter(Boolean),stuck=setTimeout(()=>children.forEach(c=>c.kill('SIGKILL')),5000);
+      await Promise.all(children.map(exited)); clearTimeout(stuck);
     }
   } else if (['board','submit','pause','resume','artifact'].includes(command)) {
     const inherited=Boolean(process.env.ACCORD_SESSION_FILE);
