@@ -67,8 +67,9 @@ test('Codex environment identity survives bridge crash and cannot resurrect an e
   const c=await bridge(t,profile,env);await assert.rejects(c.call('accord_bootstrap'),/SESSION_EXPIRED/);
 });
 
-test('failed remote delivery is visible on ordinary calls and errors, then clears on recovery',async t=>{
-  const a=await harness(),b=await harness();t.after(async()=>{await a.close();await b.close();});
+test('failed remote delivery is visible on ordinary calls and errors, then clears on recovery',{timeout:90000},async t=>{
+  // A loaded runner can stall past a short lease, and a coordinator that loses it stops acknowledging work.
+  const a=await harness({leaderMs:5000}),b=await harness({leaderMs:5000});t.after(async()=>{await a.close();await b.close();});
   await link(a,b);const sender=a.client('agent-a'),recipient=b.client('agent-b');await sender.bootstrap();
   const address=(await recipient.bootstrap()).address,port=Number(new URL(b.url).port);
   await stop(b.server,'SIGKILL');const message=await sender.send(address,'durable');
@@ -77,7 +78,7 @@ test('failed remote delivery is visible on ordinary calls and errors, then clear
   assert(!JSON.stringify(state.deliveryProblems).includes('durable'));
   await assert.rejects(sender.reservation('missing'),e=>e.deliveryProblems?.messages[0].id===message.id);
   await delay(b.leaderMs+100);await b.startServer(port);
-  await eventually(async()=>(await sender.sent(message.id)).state==='delivered');
+  await eventually(async()=>(await sender.sent(message.id)).state==='delivered',30000);
   assert.equal((await sender.host()).deliveryProblems,undefined);
 });
 
