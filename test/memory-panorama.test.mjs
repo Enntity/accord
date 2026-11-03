@@ -5,7 +5,7 @@ import { chmodSync, mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../src/store.mjs';
-import { MemoryPanorama, adapters, memoryConfig } from '../src/memory-panorama.mjs';
+import { MemoryPanorama, adapters, memoryConfig, peerEntries } from '../src/memory-panorama.mjs';
 import { request } from '../src/common.mjs';
 import { harness, eventually, link } from './helpers.mjs';
 import { randomUUID } from 'node:crypto';
@@ -343,4 +343,46 @@ test('a memory whose name is not a slug is indexed under its file name', () => {
   writeFileSync(join(f.zcode, 'two-words.md'), '---\nname: Two words\ndescription: named in prose\n---\nbody\n');
   assert.equal(adapters.zcode(f.zcode).find(e => e.description === 'named in prose').name, 'two-words');
   rmSync(f.root, { recursive: true, force: true });
+});
+
+test('a source taken out of the list stops being served and is cleared', async () => {
+  const f = fixture(), { store, p } = panorama(f, ['zcode', 'agents-md']);
+  await p.scan();
+  const authority = p.list({ query: 'agents guide', limit: 20 }).entries[0];
+  p.config.sources = ['zcode'];
+  assert.equal(p.list({ query: 'agents guide', limit: 20 }).entries.length, 0);
+  assert.throws(() => p.read(authority.id), e => e.code === 'NOT_FOUND');
+  p.start(); p.close();
+  assert.equal(store.db.prepare("SELECT count(*) n FROM memory_entries WHERE source='agents-md'").get().n, 0);
+  store.close();
+  rmSync(f.root, { recursive: true, force: true });
+});
+
+test('one file Accord cannot index is skipped and the rest of its source stays current', async () => {
+  const f = fixture(), { store, p } = panorama(f, ['zcode']);
+  writeFileSync(join(f.zcode, 'Meeting notes.md'), '# Notes without a slug name\n');
+  await p.scan();
+  assert.equal(p.status.sources.zcode.ok, true);
+  assert.ok(p.list({ query: 'gateway', limit: 20 }).entries.length === 1);
+  rmSync(join(f.zcode, 'beta.md'));
+  writeFileSync(join(f.zcode, 'beta.md'), '---\nname: beta\nscope: private\ndescription: now private\n---\n');
+  await p.scan();
+  assert.equal(p.list({ query: 'beta', limit: 20 }).entries.length, 0);
+  const claude = mkdtempSync(join(tmpdir(), 'accord-mem-claude-link-'));
+  mkdirSync(join(claude, 'real', 'memory'), { recursive: true });
+  writeFileSync(join(claude, 'real', 'memory', 'kept.md'), '---\nname: kept\ndescription: kept\n---\n');
+  mkdirSync(join(claude, 'linked')); symlinkSync(f.zcode, join(claude, 'linked', 'memory'));
+  assert.deepEqual(adapters.claude(claude).map(e => e.name), ['kept']);
+  rmSync(claude, { recursive: true, force: true });
+  store.close();
+  rmSync(f.root, { recursive: true, force: true });
+});
+
+test('a linked host answer is checked and capped before an agent sees it', () => {
+  const good = { id: 'a', name: 'n', type: 'project', description: 'd'.repeat(500), updated: '2026-01-01T00:00:00.000Z', source: { host: 'peer', harness: 'zcode', label: 'zcode' }, scope: 'shared', stale: false };
+  const entries = peerEntries({ entries: [good, { ...good, updated: 7 }, { ...good, source: { host: 'other' } }, 'junk', { ...good, scope: 'private' }] }, 'peer');
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].description.length, 200);
+  assert.deepEqual(peerEntries({ entries: 'nope' }, 'peer'), []);
+  assert.deepEqual(peerEntries(null, 'peer'), []);
 });

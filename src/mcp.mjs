@@ -141,16 +141,18 @@ export function mcpAdapter(profile,{identity=nativeSessionIdentity()}={}) {
 }
 export async function serveMcp(profile,input=process.stdin,output=process.stdout,diagnostics=process.stderr) {
   input.setEncoding?.('utf8');
-  const adapter=mcpAdapter(profile),nativeAdapters=new Map();let buffer='',initialized=false,clientName;
+  const nativeAdapters=new Map();let buffer='',initialized=false,clientName,adapter;
+  // Made after initialize, so the environment ID it trusts is the connecting client's own.
+  const defaultAdapter=()=>adapter??=mcpAdapter(profile,{identity:nativeSessionIdentity(process.env,clientName??'')??null});
   // Native transport metadata is supplied by the client, never by model arguments.
   // A pooled transport may carry multiple conversations: isolate their clients.
   const adapterFor=message=>{
-    if(process.env.ACCORD_SESSION_FILE)return adapter;
+    if(process.env.ACCORD_SESSION_FILE)return defaultAdapter();
     const meta=message.params?._meta,context=meta?.['com.zcode/request-context'];
     const identity=clientName==='zcode'&&context?.session_id?{source:'zcode',id:context.session_id}
       :(clientName?.startsWith('codex')||meta?.['x-codex-turn-metadata']!==undefined)&&(meta?.threadId??meta?.sessionId)
         ?{source:'codex',id:meta.threadId??meta.sessionId}:null;
-    if(!identity)return adapter;
+    if(!identity)return defaultAdapter();
     requireThat(typeof identity.id==='string'&&identity.id.length<=200,'INVALID_INPUT','Invalid native session identity',400);
     const key=nativeEnrollmentKey(identity);
     if(!nativeAdapters.has(key)){
@@ -207,5 +209,5 @@ export async function serveMcp(profile,input=process.stdin,output=process.stdout
       }
     }
     await Promise.allSettled(inFlight);
-  } finally {await Promise.allSettled(inFlight);await Promise.allSettled([adapter,...nativeAdapters.values()].map(a=>a.close()));}
+  } finally {await Promise.allSettled(inFlight);await Promise.allSettled([adapter,...nativeAdapters.values()].filter(Boolean).map(a=>a.close()));}
 }

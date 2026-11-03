@@ -31,7 +31,9 @@ MCP reuses a persistent session when its trusted launcher supplies a native
 conversation ID: `CODEX_THREAD_ID`, `CLAUDE_SESSION_ID`, `ZCODE_SESSION_ID`, or
 `TESSERA_TILE_ID`. ZCode also supplies `com.zcode/request-context.session_id`
 in MCP call metadata; Codex desktop supplies `threadId` in its native MCP metadata.
-Each conversation gets its own client even on a pooled
+A bridge trusts only the ID that belongs to the client that connected (and the
+Tessera tile it runs in), so an agent started inside another agent's shell never
+takes that agent's mailbox. Each conversation gets its own client even on a pooled
 transport. These IDs never come from model tool arguments. Closing or crashing
 the transport does not close the native conversation. Explicit session closure
 still takes effect and cannot be undone by reconnecting.

@@ -89,3 +89,16 @@ test('Codex desktop native tool metadata retains identity without environment ID
   const b=await bridge(t,profile,{},'codex');assert.equal((await b.call('accord_inbox')).messages[0].text,'desktop reply');
   assert.equal((await b.call('accord_bootstrap')).address,original.address);
 });
+
+test('an agent started inside another agent\'s shell never takes that agent\'s mailbox',async t=>{
+  const h=await harness();t.after(()=>h.close());const {profile}=install({home:join(h.data,'home'),data:h.data});
+  const parent=await bridge(t,profile,{CODEX_THREAD_ID:'parent-codex'},'codex-env');const owner=await parent.call('accord_bootstrap');
+  for(const client of ['claude-code','opencode']){
+    const child=await bridge(t,profile,{CODEX_THREAD_ID:'parent-codex'},client);
+    assert.notEqual((await child.call('accord_bootstrap')).address,owner.address,client);
+  }
+  const {nativeSessionIdentity}=await import('../src/bootstrap.mjs');
+  assert.deepEqual(nativeSessionIdentity({CODEX_THREAD_ID:'p',CLAUDE_SESSION_ID:'c'},'claude-code'),{source:'claude',id:'c'});
+  assert.deepEqual(nativeSessionIdentity({CODEX_THREAD_ID:'p',TESSERA_TILE_ID:'tile'},'opencode'),{source:'tessera',id:'tile'});
+  assert.equal(nativeSessionIdentity({CODEX_THREAD_ID:'p'},'opencode'),undefined);
+});

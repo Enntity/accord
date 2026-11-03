@@ -75,6 +75,15 @@ function fileEntry(source, root, path, type) {
   };
 }
 
+// A file Accord refuses to index is skipped; an I/O failure still fails its source.
+const SKIPPED = new Set(['INVALID_NAME', 'REFUSED_PATH', 'REFUSED_SYMLINK', 'NOT_A_FILE']);
+function entries(source, root, paths, type) {
+  return paths.flatMap(path => {
+    try { return [fileEntry(source, root, path, type)]; }
+    catch (error) { if (SKIPPED.has(error.code)) return []; throw error; }
+  });
+}
+
 // One markdown directory, N levels deep. Covers ZCode's project memory layout
 // and Claude's memory directories; MEMORY.md style index files are entries too.
 // Credential-shaped paths are skipped by the walker, never indexed. Failures
@@ -104,20 +113,17 @@ export const DEFAULT_ROOTS = {
 const shared = entries => entries.filter(e => e.scope === 'shared');
 
 export const adapters = {
-  zcode: root => shared(markdownFiles(root ?? DEFAULT_ROOTS.zcode, 3)
-    .filter(p => p.endsWith('.md') || p.endsWith('.markdown'))
-    .map(path => fileEntry('zcode', root ?? DEFAULT_ROOTS.zcode, path, 'project'))),
+  zcode: (root = DEFAULT_ROOTS.zcode) => shared(entries('zcode', root, markdownFiles(root, 3)
+    .filter(p => p.endsWith('.md') || p.endsWith('.markdown')), 'project')),
   // Claude keeps memory in projects/<project>/memory beside transcripts and tool output,
   // so only those folders are read.
-  claude: (root = DEFAULT_ROOTS.claude) => shared(readdirSync(root, { withFileTypes: true })
-    .filter(item => item.isDirectory() && existsSync(join(root, item.name, 'memory')))
-    .flatMap(item => markdownFiles(join(root, item.name, 'memory'), 0).filter(p => p.endsWith('.md')))
-    .map(path => fileEntry('claude', root, path, 'project'))),
-  codex: root => shared(markdownFiles(root ?? DEFAULT_ROOTS.codex, 1)
-    .map(path => fileEntry('codex', root ?? DEFAULT_ROOTS.codex, path, 'project'))),
+  claude: (root = DEFAULT_ROOTS.claude) => shared(entries('claude', root, readdirSync(root, { withFileTypes: true })
+    .filter(item => item.isDirectory() && existsSync(join(root, item.name, 'memory')) && !lstatSync(join(root, item.name, 'memory')).isSymbolicLink())
+    .flatMap(item => markdownFiles(join(root, item.name, 'memory'), 0).filter(p => p.endsWith('.md'))), 'project')),
+  codex: (root = DEFAULT_ROOTS.codex) => shared(entries('codex', root, markdownFiles(root, 1), 'project')),
   // A root without an AGENTS.md is skipped; it never hides the others.
   'agents-md': roots => shared(roots.flatMap(root => existsSync(join(root, 'AGENTS.md'))
-    ? [fileEntry('agents-md', root, join(root, 'AGENTS.md'), 'authority')] : [])),
+    ? entries('agents-md', root, [join(root, 'AGENTS.md')], 'authority') : [])),
 };
 
 // Off by default: memory files can hold free-text secrets no redaction reliably catches,
@@ -147,10 +153,10 @@ export class MemoryPanorama {
     this.timer = null;
   }
   start() {
-    if (!this.config.enabled) {
-      this.store.mutate(() => this.store.db.prepare('DELETE FROM memory_entries').run());
-      return;
-    }
+    // Off clears everything; a source taken out of the list is cleared too.
+    const kept = this.config.enabled ? this.config.sources : [];
+    this.store.mutate(() => this.store.db.prepare(`DELETE FROM memory_entries WHERE source NOT IN (${kept.map(() => '?').join(',')})`).run(...kept));
+    if (!this.config.enabled) return;
     const tick = () => { if (!this.scanning) void this.scan().catch(() => {}); };
     this.timer = setInterval(tick, this.config.pollMs);
     this.timer.unref?.();
@@ -211,7 +217,7 @@ export class MemoryPanorama {
       'INVALID_INPUT', 'query must be a string of at most 200 characters', 400);
     integer(args.limit ?? 10, 'limit', 1, 20);
     const query = String(args.query ?? '').toLowerCase().split(/\s+/).filter(Boolean);
-    const rows = this.store.db.prepare('SELECT * FROM memory_entries ORDER BY updated DESC, name').all();
+    const rows = this.store.db.prepare('SELECT * FROM memory_entries ORDER BY updated DESC, name').all().filter(row => this.config.sources.includes(row.source));
     const entries = rows
       .filter(row => query.every(term => `${row.name} ${row.description} ${row.type}`.toLowerCase().includes(term)))
       .slice(0, args.limit ?? 10)
@@ -224,7 +230,7 @@ export class MemoryPanorama {
     requireThat(this.config.enabled, 'DISABLED', 'Memory panorama is disabled', 403);
     text(entryId, 'id', 100);
     const row = this.store.db.prepare('SELECT * FROM memory_entries WHERE id=?').get(entryId);
-    requireThat(row, 'NOT_FOUND', 'Unknown memory entry', 404);
+    requireThat(row && this.config.sources.includes(row.source), 'NOT_FOUND', 'Unknown memory entry', 404);
     requireThat(row.type !== 'authority', 'AUTHORITY_BODY', 'Instruction files are read from disk; the index only locates them', 403);
     // Revalidate the source at read time: the path must still be a regular
     // file with the indexed identity, or the entry is stale.
@@ -248,7 +254,22 @@ export class MemoryPanorama {
 
   learnings() {
     if (!this.config.enabled || !this.config.learnings) return [];
-    const rows = this.store.db.prepare("SELECT * FROM memory_entries WHERE stale=0 ORDER BY updated DESC LIMIT ?").all(LEARNINGS_MAX);
+    const rows = this.store.db.prepare("SELECT * FROM memory_entries WHERE stale=0 ORDER BY updated DESC").all().filter(row => this.config.sources.includes(row.source)).slice(0, LEARNINGS_MAX);
     return rows.map(row => ({ name: row.name, type: row.type, description: row.description, updated: row.updated, source: row.source }));
   }
+}
+
+// A linked host's answer is untrusted: keep only well-formed shared entries that host
+// owns, capped like local ones, before an agent sees them.
+const clip = (value, max) => typeof value === 'string' ? value.slice(0, max) : null;
+export function peerEntries(result, authority) {
+  if (!Array.isArray(result?.entries)) return [];
+  return result.entries.slice(0, 20).flatMap(entry => {
+    if (!entry || typeof entry !== 'object' || entry.source?.host !== authority || entry.scope !== 'shared') return [];
+    const fields = { id: clip(entry.id, 100), name: clip(entry.name, 100), type: clip(entry.type, 40), description: clip(entry.description, DESCRIPTION_MAX),
+      updated: clip(entry.updated, 40), harness: clip(entry.source.harness, 40), label: clip(entry.source.label, 80) };
+    if (Object.values(fields).some(value => value === null)) return [];
+    const { harness, label, ...rest } = fields;
+    return [{ ...rest, source: { host: authority, harness, label }, scope: 'shared', stale: Boolean(entry.stale) }];
+  });
 }

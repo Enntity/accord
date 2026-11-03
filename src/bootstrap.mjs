@@ -72,14 +72,17 @@ export function inheritedClient() {
 
 // A trusted local launcher supplies native IDs from its environment, never from
 // a model tool argument or a guessed working-directory/name match.
-export function nativeSessionIdentity(env=process.env){
-  for(const [source,id] of [['codex',env.CODEX_THREAD_ID],['claude',env.CLAUDE_SESSION_ID],['zcode',env.ZCODE_SESSION_ID],['tessera',env.TESSERA_TILE_ID]])
+// A named client trusts only its own ID and its terminal's: an agent started inside
+// another agent's shell inherits that agent's ID and must never take its mailbox.
+export function nativeSessionIdentity(env=process.env,client){
+  const all=[['codex',env.CODEX_THREAD_ID],['claude',env.CLAUDE_SESSION_ID],['zcode',env.ZCODE_SESSION_ID],['tessera',env.TESSERA_TILE_ID]];
+  for(const [source,id] of client===undefined?all:all.filter(([source])=>source==='tessera'||String(client).toLowerCase().startsWith(source)))
     if(id)return {source,id};
 }
 export const nativeEnrollmentKey=identity=>`mcp-native:${hash(JSON.stringify([identity.source,identity.id]))}`;
 export async function bindNativeSession(profile,client,nativeIdentity){
   if(!profile.endpointFile)return;
-  const bindings=nativeIdentity?[[nativeIdentity.source,nativeIdentity.id]]:[['codex',process.env.CODEX_THREAD_ID],['claude',process.env.CLAUDE_SESSION_ID],['tessera',process.env.TESSERA_TILE_ID]].filter(([,id])=>id);
+  const bindings=nativeIdentity?[[nativeIdentity.source,nativeIdentity.id]]:nativeIdentity===null?[]:[['codex',process.env.CODEX_THREAD_ID],['claude',process.env.CLAUDE_SESSION_ID],['tessera',process.env.TESSERA_TILE_ID]].filter(([,id])=>id);
   if(!bindings.length)return;
   const admin=readFileSync(join(dirname(profile.endpointFile),'admin.token'),'utf8').trim();
   for(const [source,externalId] of bindings)await request(profile.url,admin,'/v1/collaboration',{operation:'session-bind',args:{key:`bind:${client.session.sessionId}:${source}`,source,externalId,actor:client.session.sessionId}});

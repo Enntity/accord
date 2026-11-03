@@ -78,7 +78,8 @@ into a terminal. The Windows waiters run in CI; no real harness has been woken o
 The trusted host adapter reads the exact conversation ID from the harness hook
 payload. After `accord_bootstrap` or `accord_announce`, it binds that ID to the
 authenticated Accord address in the tool result. Existing launcher bindings via
-`CODEX_THREAD_ID`, `CLAUDE_SESSION_ID` and `TESSERA_TILE_ID` still work. Working
+`CODEX_THREAD_ID`, `CLAUDE_SESSION_ID` and `TESSERA_TILE_ID` still work, each only
+for the client it belongs to; an inherited parent ID is ignored. Working
 directories, labels and the most recently active session never establish identity.
 Hooks carrying a child `agent_id` use the unread-count fallback, so a shared
 parent conversation ID cannot overwrite the parent's binding or expose its mail.
