@@ -92,7 +92,7 @@ test('v1 database migrates additively without changing authority, claim generati
   const current=new Store(file);t.after(()=>current.close());
   assert.equal(current.authority,'original-host');assert.equal(current.claim('claim').generation,7);
   assert.equal(current.task('task').checkpoint,'durable checkpoint');assert.equal(current.authenticate('old-secret').id,'old-worker');
-  assert.equal(current.db.prepare('SELECT count(*) AS n FROM migrations').get().n,13);
+  assert.equal(current.db.prepare('SELECT count(*) AS n FROM migrations').get().n,14);
   current.takeLeadership();assert.equal(current.claim('claim').state,'revoking');assert.equal(current.board().resource.holders.length,1);
 });
 
@@ -101,7 +101,7 @@ test('v9 native bindings migrate into mailbox aliases without changing prior che
   const seed=new Store(file);seed.provision('prior-session','secret','worker');
   seed.db.prepare('INSERT INTO session_bindings VALUES(?,?,?)').run('claude','native','prior-session');
   const checksums=seed.db.prepare('SELECT * FROM migrations WHERE version<=9').all();seed.close();
-  const old=new DatabaseSync(file);old.exec('DROP TABLE session_mailbox_aliases; ALTER TABLE session_views DROP COLUMN parent_session; DROP TABLE resource_pools; ALTER TABLE reservations DROP COLUMN pool; ALTER TABLE links DROP COLUMN share_sessions; DELETE FROM migrations WHERE version>=10');old.close();
+  const old=new DatabaseSync(file);old.exec('DROP TABLE session_mailbox_aliases; ALTER TABLE session_views DROP COLUMN parent_session; DROP TABLE resource_pools; ALTER TABLE reservations DROP COLUMN pool; ALTER TABLE links DROP COLUMN share_sessions; DROP TABLE memory_entries; DELETE FROM migrations WHERE version>=10');old.close();
   const current=new Store(file);t.after(()=>current.close());
   assert.deepEqual(current.db.prepare('SELECT * FROM migrations WHERE version<=9').all(),checksums);
   assert.deepEqual({...current.db.prepare('SELECT * FROM session_mailbox_aliases').get()},{source:'claude',external_id:'native',actor:'prior-session'});

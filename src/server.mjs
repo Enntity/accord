@@ -11,6 +11,7 @@ import { createHmac } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { plugins,validateResource } from './resource-plugins.mjs';
 import { Collaboration } from './collaboration.mjs';
+import { MemoryPanorama, memoryConfig } from './memory-panorama.mjs';
 import { Attention } from './attention.mjs';
 import { Store } from './store.mjs';
 import { bootstrapView } from './bootstrap-view.mjs';
@@ -25,6 +26,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
   const store = new Store(db, { leaderMs });
   try { store.takeLeadership(); } catch (e) { store.close(); throw e; }
   const collaboration=new Collaboration(store,db);
+  const memory=new MemoryPanorama(store,memoryConfig());
   const managers=new ResourceManagers(store,dirname(db));
   const awareness=new SessionAwareness(store),overseer=new Overseer(store,awareness,collaboration);
   managers.onRunning=row=>{try{collaboration.granted(overseer.actor,{key:`grant:${row.id}`,reservation:row.id,actor:row.actor,resource:row.resource,queuedAt:row.created_at});}catch{/* A notice is a hint. */}};
@@ -91,6 +93,8 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     overseer.dispatch();
   }catch{/* Keep ownership reconciliation independent of observation failures. */}finally{monitoring=false;}},10000);
   const mailTimer=setInterval(()=>{if(!closed&&!unhealthy)void collaboration.flush().catch(()=>{});},1000);
+  memory.start();
+  const memoryTimer=setInterval(()=>{if(!closed&&!unhealthy)void memory.scan().catch(()=>{});},memory.config.pollMs);
   function describe(actor, claimId) {
     const claim = store.owned(actor, claimId);
     return { ...claim, task: store.task(claim.task_id), driverUrl,
@@ -148,6 +152,15 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     }));
     return {sessions:[...local.sessions,...remote.flat()].sort((a,b)=>b.progressAt-a.progressAt).slice(0,200),hosts};
   }
+  async function memoriesAcrossHosts(actor,args={}) {
+    const local=memory.list(args), hosts=[];
+    const remote=await Promise.all(store.db.prepare('SELECT authority FROM links ORDER BY authority LIMIT 32').all().map(async peer=>{
+      try { const result=await collaboration.forward(peer.authority,'memories',args,actor);hosts.push({authority:peer.authority,status:'observed'});
+        return (result.entries??[]).filter(entry=>entry.source?.host===peer.authority); }
+      catch { hosts.push({authority:peer.authority,status:'unknown'});return []; }
+    }));
+    return {entries:[...local.entries,...remote.flat()].sort((a,b)=>b.updated.localeCompare(a.updated)).slice(0,args.limit??10),hosts,sources:local.sources,lastScan:local.lastScan};
+  }
   function nativeActor(view) {
     const binding=store.db.prepare('SELECT b.actor FROM session_bindings b JOIN sessions s ON s.id=b.actor WHERE b.source=? AND b.external_id=? AND s.closed_at IS NULL AND s.expires_at>?').get(view.source,view.external_id,store.now());
     return {id:binding?.actor??view.id,role:'worker'};
@@ -173,6 +186,8 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     if(operation==='heartbeat')return awareness.heartbeat(actor);
     if(operation==='sessions')return awareness.list(args);
     if(operation==='session-read')return awareness.read(args.id,args);
+    if(operation==='memories')return memory.list(args);
+    if(operation==='memory-read')return memory.read(args.id);
     if(operation==='session-snooze')return awareness.snooze(actor,args);
     if(operation==='jobs')return awareness.jobs();
     if(operation==='job')return awareness.job(actor,args);
@@ -251,7 +266,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
       const peer=collaboration.peer(credential),body=await readBody(req);
       // Observations must not provision proxy actors or write coordination state.
       if(['telemetry','metadata','memory'].includes(body.operation))return {authority:store.authority,value:await telemetry[body.operation]()};
-      if(['sessions','session-read','jobs','overseer'].includes(body.operation)){
+      if(['sessions','session-read','jobs','overseer','memories','memory-read'].includes(body.operation)){
         requireThat(peer.share_sessions,'NOT_SHARED','This host does not share session activity with this link',403);
         return {authority:store.authority,value:await collaborate(null,body.operation,body.args)};
       }
@@ -262,7 +277,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
         requireThat(body.args?.from===`${peer.authority}/${body.actor}`,'FORBIDDEN','Sender does not match linked host',403);
         value=collaboration.deliver(body.args);
       }else{
-        requireThat(['resources','reserve','reservation','release','renew','start','process','workload-register','workload-launch','workload-list','telemetry','metadata','sessions','session-read','jobs','job','overseer','session-snooze'].includes(body.operation),'FORBIDDEN','Operation cannot be forwarded',403);
+        requireThat(['resources','reserve','reservation','release','renew','start','process','workload-register','workload-launch','workload-list','telemetry','metadata','sessions','session-read','jobs','job','overseer','session-snooze','memories','memory-read'].includes(body.operation),'FORBIDDEN','Operation cannot be forwarded',403);
         value=await collaborate(actor,body.operation,body.args);
       }
       store.assertLeader();return {authority:store.authority,value};
@@ -279,10 +294,11 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     if(url.pathname==='/v1/collaboration'&&req.method==='POST'){
       const body=await readBody(req);
       if(body.host&&body.host!==store.authority){
-        requireThat(['resources','reserve','reservation','release','renew','start','process','workload-register','workload-launch','workload-list','telemetry','metadata','sessions','session-read','jobs','job','overseer','session-snooze'].includes(body.operation),'FORBIDDEN','Operation cannot be forwarded',403);
+        requireThat(['resources','reserve','reservation','release','renew','start','process','workload-register','workload-launch','workload-list','telemetry','metadata','sessions','session-read','jobs','job','overseer','session-snooze','memories','memory-read'].includes(body.operation),'FORBIDDEN','Operation cannot be forwarded',403);
         return collaboration.forward(body.host,body.operation,body.args,actor);
       }
       if(body.operation==='sessions'&&!body.host)return sessionsAcrossHosts(actor,body.args);
+      if(body.operation==='memories'&&!body.host)return memoriesAcrossHosts(actor,body.args);
       const gone=new AbortController();res.once('close',()=>gone.abort());
       return collaborate(actor,body.operation,body.args,gone.signal);
     }
@@ -290,7 +306,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
       if(!store.db.prepare('SELECT actor FROM participants WHERE actor=?').get(actor.id))collaboration.announce(actor,{key:'bootstrap-registration',label:actor.session?.label??actor.id,capabilities:[],activity:'available'});
       const [local,peers,directory]=await Promise.all([host(),network(),collaboration.find('',true,collaboration.address(actor))]);
       store.authenticate(credential);
-      return bootstrapView({actor,local,peers,directory,inbox:collaboration.inbox(actor)});
+      return bootstrapView({actor,local,peers,directory,inbox:collaboration.inbox(actor),learnings:memory.learnings()});
     }
     if (url.pathname === '/v1/network' && req.method === 'GET') return {hosts:[{status:'observed',host:await host()},...await network()]};
     if(url.pathname==='/v1/plugins'&&req.method==='GET')return {plugins};
@@ -403,7 +419,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
   return {
     server, store, reconcile,
     async close() {
-      closed = true; attention.close(); await observationRuntime.close();clearInterval(timer); clearInterval(heartbeat);clearInterval(mailTimer);clearInterval(overseerTimer);
+      closed = true; attention.close(); await observationRuntime.close();clearInterval(timer); clearInterval(heartbeat);clearInterval(mailTimer);clearInterval(overseerTimer);clearInterval(memoryTimer);memory.close();
       server.closeAllConnections();
       await new Promise(resolve => server.close(resolve));
       while (busy||collaboration.sending||monitoring||managers.busy) await new Promise(resolve => setTimeout(resolve, 10));

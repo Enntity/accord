@@ -20,10 +20,11 @@ const hostLists=hosts=>{
   const known=new Map();for(const h of hosts)if(h.status==='unknown'||!known.has(h.authority))known.set(h.authority,h.status);
   return clean({hosts:[...known.keys()],unknownHosts:[...known].filter(([,s])=>s==='unknown').map(([a])=>a)});
 };
-export function bootstrap({address,announced,participants=[],resourceList,pools,hosts=[],recent,observed,inboxPending}){
+export function bootstrap({address,announced,participants=[],resourceList,pools,hosts=[],recent,observed,inboxPending,learnings}){
   const peers=participants.slice(0,5).map(participant);
   return {participants:peers,...clean({address,announced:announced||undefined,moreParticipants:Math.max(0,(recent??peers.length)-peers.length)||undefined,
-    ...resources(resourceList,pools),...hostLists(hosts),observed:observed||undefined,inboxPending:inboxPending||undefined})};
+    ...resources(resourceList,pools),...hostLists(hosts),observed:observed||undefined,inboxPending:inboxPending||undefined,
+    learnings:(learnings??[]).slice(0,5).map(l=>clean({name:l.name,type:l.type,description:clip(l.description,120),source:l.source,updated:l.updated}))})};
 }
 export function find(result,query=''){
   const ranked=[...(result.participants??[])].sort((a,b)=>(rank[a.presence]??0)-(rank[b.presence]??0)||(b.lastSeen??0)-(a.lastSeen??0));
