@@ -2,10 +2,11 @@
 // The memory panorama indexes each harness's own memory store, read-only.
 // Descriptions and provenance are served; bodies stay on their host and are
 // fetched only by an explicit read. Native stores are never written.
-import { lstatSync, readdirSync, readFileSync } from 'node:fs';
+import { lstatSync, openSync, readdirSync, readSync, closeSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { extname, join, relative, resolve } from 'node:path';
 import { hash, integer, requireThat, text } from './common.mjs';
+import { redact } from './session-awareness.mjs';
 
 const DESCRIPTION_MAX = 200, BODY_MAX = 16 * 1024, ENTRY_CAP = 2000, HASH_WINDOW = 1024 * 1024;
 const LEARNINGS_MAX = 5, QUERY_MAX = 200;
@@ -31,7 +32,16 @@ function describe(meta, rest) {
     if (!candidate || /^(thread_id|session_id|run_id|id|created_at|updated_at)\s*[:=]/i.test(candidate)) continue;
     description = candidate; break;
   }
-  return description.replace(/\s+/g, ' ').trim().slice(0, DESCRIPTION_MAX);
+  return redact(description.replace(/\s+/g, ' ').trim()).slice(0, DESCRIPTION_MAX);
+}
+
+// Read at most max bytes from the start without loading a whole file.
+function readWindow(path, max) {
+  const size = statSync(path).size, buffer = Buffer.alloc(Math.min(size, max));
+  const fd = openSync(path, 'r');
+  try { if (buffer.length) readSync(fd, buffer, 0, buffer.length, 0); }
+  finally { closeSync(fd); }
+  return buffer;
 }
 
 function fileEntry(source, root, path, type) {
@@ -39,33 +49,36 @@ function fileEntry(source, root, path, type) {
   const info = lstatSync(path);
   if (info.isSymbolicLink()) throw Object.assign(new Error('Refused: symlink'), { code: 'REFUSED_SYMLINK' });
   requireThat(info.isFile(), 'NOT_A_FILE', 'Indexable paths must be regular files');
-  const raw = readFileSync(path).subarray(0, HASH_WINDOW);
+  const raw = readWindow(path, HASH_WINDOW);
   const { meta, rest } = frontmatter(raw.toString('utf8'));
   const name = String(meta.name ?? relative(root, path).replace(/\.md$/, '').split('/').at(-1)).trim();
   requireThat(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/.test(name), 'INVALID_NAME', 'Memory names must be simple slugs');
   return {
-    id: hash(`${source}:${relative(root, path)}`),
+    // Full canonical path in the id, so two configured roots can never collide.
+    id: hash(`${source}:${resolve(path)}`),
     source, name, type,
     description: describe(meta, rest),
     updated: new Date(Math.floor(info.mtimeMs)).toISOString(),
     hash: hash(raw),
     path: resolve(path),
-    scope: 'shared',
+    scope: meta.scope === 'private' ? 'private' : 'shared',
   };
 }
 
 // One markdown directory, N levels deep. Covers ZCode's project memory layout
 // and Claude's memory directories; MEMORY.md style index files are entries too.
-// Credential-shaped paths are skipped by the walker, never indexed.
+// Credential-shaped paths are skipped by the walker, never indexed. Failures
+// propagate: a vanished root or unreadable directory must never look like an
+// empty store, which would erase previously indexed entries.
 function markdownFiles(root, depth = 1) {
   if (FORBIDDEN.test(root)) return [];
   const files = [];
-  let items;
-  try { items = readdirSync(root, { withFileTypes: true }); } catch { return []; }
+  const items = readdirSync(root, { withFileTypes: true });
   for (const item of items) {
     const path = join(root, item.name);
     if (item.isDirectory() && depth > 0) files.push(...markdownFiles(path, depth - 1));
     else if (item.isFile() && ['.md', '.markdown', '.txt'].includes(extname(item.name)) && !FORBIDDEN.test(path)) files.push(path);
+    if (files.length > ENTRY_CAP) throw Object.assign(new Error('Store exceeds the entry cap'), { code: 'ENTRY_CAP' });
   }
   return files.sort();
 }
@@ -76,19 +89,20 @@ export const DEFAULT_ROOTS = {
   codex: join(homedir(), '.codex', 'memories'),
 };
 
+// Private entries never enter the index: an already indexed file that becomes
+// private drops out on the next scan.
+const shared = entries => entries.filter(e => e.scope === 'shared');
+
 export const adapters = {
-  zcode: root => markdownFiles(root ?? DEFAULT_ROOTS.zcode, 3)
+  zcode: root => shared(markdownFiles(root ?? DEFAULT_ROOTS.zcode, 3)
     .filter(p => p.endsWith('.md') || p.endsWith('.markdown'))
-    .map(path => fileEntry('zcode', root ?? DEFAULT_ROOTS.zcode, path, 'project')),
-  claude: root => markdownFiles(root ?? DEFAULT_ROOTS.claude, 2)
-    .map(path => fileEntry('claude', root ?? DEFAULT_ROOTS.claude, path, 'project')),
-  codex: root => markdownFiles(root ?? DEFAULT_ROOTS.codex, 1)
-    .map(path => fileEntry('codex', root ?? DEFAULT_ROOTS.codex, path, 'project')),
-  'agents-md': roots => roots.flatMap(root => {
-    const path = join(root, 'AGENTS.md');
-    try { return [fileEntry('agents-md', root, path, 'authority')]; }
-    catch (error) { if (error.code === 'ENOENT') return []; throw error; }
-  }),
+    .map(path => fileEntry('zcode', root ?? DEFAULT_ROOTS.zcode, path, 'project'))),
+  claude: root => shared(markdownFiles(root ?? DEFAULT_ROOTS.claude, 2)
+    .map(path => fileEntry('claude', root ?? DEFAULT_ROOTS.claude, path, 'project'))),
+  codex: root => shared(markdownFiles(root ?? DEFAULT_ROOTS.codex, 1)
+    .map(path => fileEntry('codex', root ?? DEFAULT_ROOTS.codex, path, 'project'))),
+  'agents-md': roots => shared(roots.flatMap(root =>
+    [fileEntry('agents-md', root, join(root, 'AGENTS.md'), 'authority')])),
 };
 
 export function memoryConfig(env = process.env) {
@@ -131,13 +145,15 @@ export class MemoryPanorama {
       for (const entry of entries) {
         if (known.get(entry.id) === entry.hash) continue;
         this.store.db.prepare(`INSERT INTO memory_entries(id,source,name,type,description,updated,hash,path,scope,stale)
-          VALUES(?,?,?,?,?,?,?,?,'shared',0) ON CONFLICT(id) DO UPDATE SET name=excluded.name,type=excluded.type,description=excluded.description,
-          updated=excluded.updated,hash=excluded.hash,path=excluded.path,stale=0`).run(
-          entry.id, entry.source, entry.name, entry.type, entry.description, entry.updated, entry.hash, entry.path);
+          VALUES(?,?,?,?,?,?,?,?,?,0) ON CONFLICT(id) DO UPDATE SET name=excluded.name,type=excluded.type,description=excluded.description,
+          updated=excluded.updated,hash=excluded.hash,path=excluded.path,scope=excluded.scope,stale=0`).run(
+          entry.id, entry.source, entry.name, entry.type, entry.description, entry.updated, entry.hash, entry.path, entry.scope);
       }
       const keep = new Set(entries.map(e => e.id));
       for (const id of known.keys()) if (!keep.has(id))
         this.store.db.prepare('DELETE FROM memory_entries WHERE id=?').run(id);
+      // A completed scan re-observed every surviving entry; stale uncertainty ends here.
+      this.store.db.prepare('UPDATE memory_entries SET stale=0 WHERE source=?').run(source);
     });
     this.status.sources[source] = { ok: true, entries: entries.length, at: Date.now() };
   }
@@ -146,36 +162,31 @@ export class MemoryPanorama {
     this.status.sources[source] = { ok: false, error: error.code ?? 'SCAN_FAILED', at: Date.now() };
   }
   async scan() {
-    if (this.scanning) return; this.scanning = true;
+    if (this.scanning || !this.config.enabled) return; this.scanning = true;
     try {
       for (const source of this.config.sources) {
         const adapter = adapters[source];
         if (!adapter) { this.status.sources[source] = { ok: false, error: 'UNKNOWN_SOURCE', at: Date.now() }; continue; }
-        const root = this.config.roots[source];
+        const existing = this.store.db.prepare('SELECT count(*) n FROM memory_entries WHERE source=?').get(source).n;
         try {
-          const existing = this.store.db.prepare('SELECT count(*) n FROM memory_entries WHERE source=?').get(source).n;
-          const rootMissing = DEFAULT_ROOTS[source] !== undefined && (() => {
-            try { return !lstatSync(resolve(this.config.roots[source] ?? DEFAULT_ROOTS[source])).isDirectory(); } catch { return true; }
-          })();
-          if (rootMissing && existing) {
-            // A store that disappears leaves its entries uncertain, not erased.
-            this.markStale(source, { code: 'ROOT_MISSING' });
-            continue;
-          }
-          const entries = adapter(root);
-          if (!entries.length && !existing && !this.status.sources[source]) {
+          const entries = adapter(this.config.roots[source]);
+          this.sync(source, entries);
+        } catch (error) {
+          if (error.code === 'ENOENT' && !existing) {
             // Absent store: the harness is simply not installed here.
             this.status.sources[source] = { ok: true, entries: 0, at: Date.now() };
-            continue;
+          } else {
+            // A vanished or unreadable store leaves entries stale, never erased.
+            this.markStale(source, error);
           }
-          this.sync(source, entries);
-        } catch (error) { this.markStale(source, error); }
+        }
       }
       this.status.lastScan = Date.now();
     } finally { this.scanning = false; }
   }
 
   list(args = {}) {
+    if (!this.config.enabled) return { entries: [], sources: {}, lastScan: null };
     requireThat(args.query === undefined || typeof args.query === 'string' && args.query.length <= QUERY_MAX,
       'INVALID_INPUT', 'query must be a string of at most 200 characters', 400);
     integer(args.limit ?? 10, 'limit', 1, 20);
@@ -190,16 +201,29 @@ export class MemoryPanorama {
   }
 
   read(entryId) {
+    requireThat(this.config.enabled, 'DISABLED', 'Memory panorama is disabled', 403);
     text(entryId, 'id', 100);
     const row = this.store.db.prepare('SELECT * FROM memory_entries WHERE id=?').get(entryId);
     requireThat(row, 'NOT_FOUND', 'Unknown memory entry', 404);
     requireThat(row.type !== 'authority', 'AUTHORITY_BODY', 'Instruction files are read from disk; the index only locates them', 403);
-    let body;
-    try { body = readFileSync(row.path).subarray(0, BODY_MAX).toString('utf8'); }
-    catch { this.markStale(row.source, { code: 'BODY_UNAVAILABLE' }); }
-    requireThat(body !== undefined, 'STALE_ENTRY', 'The entry body is unavailable on this host', 410);
+    // Revalidate the source at read time: the path must still be a regular
+    // file with the indexed identity, or the entry is stale.
+    let body, truncated = false;
+    try {
+      const info = lstatSync(row.path);
+      if (info.isSymbolicLink() || !info.isFile() || FORBIDDEN.test(row.path))
+        throw Object.assign(new Error('Entry source changed'), { code: 'SOURCE_CHANGED' });
+      const raw = readWindow(row.path, HASH_WINDOW);
+      requireThat(hash(raw) === row.hash, 'SOURCE_CHANGED', 'The entry changed since it was indexed', 410);
+      truncated = raw.length > BODY_MAX;
+      body = redact(raw.subarray(0, BODY_MAX).toString('utf8'));
+    } catch (error) {
+      // Only the read entry becomes uncertain; the source itself is still healthy.
+      this.store.mutate(() => this.store.db.prepare('UPDATE memory_entries SET stale=1 WHERE id=?').run(row.id));
+      throw Object.assign(new Error('The entry body is unavailable or changed on this host'), { code: 'STALE_ENTRY', cause: error.code });
+    }
     return { id: row.id, name: row.name, type: row.type, description: row.description, updated: row.updated, hash: row.hash,
-      body, path: row.path };
+      truncated, body, path: row.path };
   }
 
   learnings() {
