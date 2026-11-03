@@ -51,9 +51,11 @@ test('ZCode reconnect and multiplexing preserve separate native mailboxes and ac
   await resumed.call('accord_read',{deliveryId:mail.messages[0].deliveryId});
   await resumed.close();
   const again=await bridge(t,profile);assert.equal((await again.call('accord_inbox')).messages.length,0);
-  const db=new DatabaseSync(join(h.data,'coordinator.sqlite'),{readOnly:true});t.after(()=>db.close());
-  assert.equal(db.prepare("SELECT count(*) n FROM session_bindings WHERE external_id='parent-thread-must-not-bind'").get().n,0);
-  assert.equal(db.prepare("SELECT actor FROM session_bindings WHERE source='zcode' AND external_id='native-one'").get().actor,first.address.split('/')[1]);
+  const db=new DatabaseSync(join(h.data,'coordinator.sqlite'),{readOnly:true});
+  try{
+    assert.equal(db.prepare("SELECT count(*) n FROM session_bindings WHERE external_id='parent-thread-must-not-bind'").get().n,0);
+    assert.equal(db.prepare("SELECT actor FROM session_bindings WHERE source='zcode' AND external_id='native-one'").get().actor,first.address.split('/')[1]);
+  }finally{db.close();}// Windows cannot delete a database that is still open.
 });
 
 test('Codex environment identity survives bridge crash and cannot resurrect an explicitly closed session',async t=>{
