@@ -101,7 +101,7 @@ test('search is conjunctive, capped, and provenance-carrying; stale entries surv
   rmSync(f.root, { recursive: true, force: true });
 });
 
-test('a partially unreadable store is reported stale, not silently emptied', async () => {
+test('a partially unreadable store is reported stale, not silently emptied', { skip: process.platform === 'win32' && 'no POSIX folder permissions' }, async () => {
   const f = fixture(), { store, p } = panorama(f, ['zcode']);
   await p.scan();
   const before = p.list({ limit: 20 }).entries.length;

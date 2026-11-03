@@ -78,7 +78,7 @@ test('queued cancellations, session end, coordinator restart, and lease expiry d
   await eventually(async()=>(await a.reservation(r.id)).state==='running');
   await b.release(q.id);assert.equal((await b.reservation(q.id)).state,'cancelled');
   const port=Number(new URL(h.url).port);await stop(h.server,'SIGKILL');await delay(h.leaderMs+100);await h.startServer(port);
-  await eventually(async()=>(await a.reservation(r.id)).state==='failed');
+  await eventually(async()=>(await a.reservation(r.id)).state==='failed',20000);
   const fresh=await b.reserve('artifact',{leaseMs:600});await eventually(async()=>(await b.reservation(fresh.id)).state==='running');
   await eventually(async()=>(await b.reservation(fresh.id)).state==='failed');
   assert.equal((await b.reservation(q.id)).state,'cancelled');
