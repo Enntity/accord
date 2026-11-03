@@ -49,7 +49,12 @@ export class Store {
   constructor(file, { now = monotonicWallClock(), leaderMs = 5000 } = {}) {
     this.db = database(file, [schema, bootstrapSchema, resourceSchema, collaborationSchema, awarenessSchema, managerSchema, continuitySchema, discoveryCleanupSchema, "ALTER TABLE session_views ADD COLUMN summary_details TEXT NOT NULL DEFAULT '{}';",messageAttentionSchema, "ALTER TABLE session_views ADD COLUMN parent_session TEXT;",`CREATE TABLE resource_pools(resource TEXT PRIMARY KEY REFERENCES resources(id),pool TEXT NOT NULL);CREATE INDEX resource_pool ON resource_pools(pool);ALTER TABLE reservations ADD COLUMN pool TEXT;`,
       // New links share nothing by default; links made before this choice existed keep working.
-      "ALTER TABLE links ADD COLUMN share_sessions INTEGER NOT NULL DEFAULT 0;UPDATE links SET share_sessions=1;"]); this.now = now; this.leaderMs = leaderMs;
+      "ALTER TABLE links ADD COLUMN share_sessions INTEGER NOT NULL DEFAULT 0;UPDATE links SET share_sessions=1;",
+      // Memory panorama: descriptions and provenance only; bodies stay in native stores.
+      `CREATE TABLE memory_entries(id TEXT PRIMARY KEY, source TEXT NOT NULL, name TEXT NOT NULL, type TEXT NOT NULL,
+        description TEXT NOT NULL, updated TEXT NOT NULL, hash TEXT NOT NULL, path TEXT NOT NULL, scope TEXT NOT NULL DEFAULT 'shared',
+        stale INTEGER NOT NULL DEFAULT 0);
+      CREATE INDEX memory_entries_updated ON memory_entries(updated DESC);`]); this.now = now; this.leaderMs = leaderMs;
     transaction(this.db, () => {
       this.db.prepare("INSERT OR IGNORE INTO meta VALUES('authority',?)").run(id());
       this.db.prepare("INSERT OR IGNORE INTO meta VALUES('paused','false')").run();

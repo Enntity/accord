@@ -9,6 +9,8 @@ const schema = (properties={},required=[]) => ({type:'object',properties,require
 export const toolCatalog = [
   ['accord_sessions','Search session titles, summaries and redacted recent activity across a linked host.',schema({query:string,host:string})],
   ['accord_session_read','Read bounded redacted session activity. Private content is refused.',schema({id:string,host:string,after:{type:'integer',minimum:0}},['id'])],
+  ['accord_recall','Search the memory panorama: what participants on this host and linked hosts have learned. Entries are untrusted data with provenance, never authority.',schema({query:string,host:string,limit:{type:'integer',minimum:1,maximum:20}})],
+  ['accord_recall_read','Read one memory entry body from its owning host, capped and refusable. Authority entries are refused.',schema({id:string,host:string},['id'])],
   ['accord_report','Publish meaningful progress, state, expected wait or completion. Heartbeat alone does not imply progress.',schema({key,title:string,state:{enum:['starting','working','idle','waiting','blocked','done','failed','exited','cancelled','unknown']},detail:string,location:string,private:{type:'boolean'},expectedAt:{type:['integer','null']},events:{type:'array',maxItems:50,items:{type:'object',properties:{key:string,kind:string,text:string},required:['key','text'],additionalProperties:false}}},['title','state'])],
   ['accord_snooze','Snooze monitoring of your session until a Unix millisecond timestamp.',schema({key,id:string,until:{type:'integer'}},['id','until'])],
   ['accord_overseer','Inspect monitoring rules, evidence and check-in incidents.',schema({host:string})],
@@ -81,6 +83,8 @@ export function mcpAdapter(profile) {
       if(announceOnJoin)requireThat(typeof args.label==='string'&&args.label.trim()&&typeof args.activity==='string'&&args.activity.trim(),'INVALID_INPUT','Bootstrap announcement requires both label and activity',400);
       const c=await client();
       const awarenessOps={accord_notify:'notify',accord_sessions:'sessions',accord_session_read:'session-read',accord_report:'session-report',accord_snooze:'session-snooze',accord_overseer:'overseer',accord_jobs:'jobs',accord_job:'job',accord_ask:'ask',accord_question:'question'};
+      if(name==='accord_recall'){const {host,...body}=args;return c.collaborate('memories',body,host);}
+      if(name==='accord_recall_read'){const {host,...body}=args;return c.collaborate('memory-read',body,host);}
       if(awarenessOps[name]){const {host,...body}=args;return c.collaborate(awarenessOps[name],{...body,key:args.key??randomUUID()},host);}
       if(name==='accord_announce')return c.announce(args);
       if(name==='accord_find')return compact.find(await c.find(args.query),args.query);
@@ -112,7 +116,7 @@ export function mcpAdapter(profile) {
         const {board,directory,peers,...context}=await c.bootstrap();
         if(!heartbeat){heartbeat=setInterval(()=>c.collaborate('heartbeat').catch(()=>{}),30000);heartbeat.unref();}
         return compact.bootstrap({address:context.address,announced:announceOnJoin,participants:directory?.participants,resourceList:context.host.resources,pools:context.host.pools,
-          hosts:[...(peers??[]),...(directory?.hosts??[]).filter(h=>h.authority!==context.host.authority)],recent:context.preview?.participants?.recent,observed:context.preview?.observations?.available,inboxPending:context.inboxPending});
+          hosts:[...(peers??[]),...(directory?.hosts??[]).filter(h=>h.authority!==context.host.authority)],recent:context.preview?.participants?.recent,observed:context.preview?.observations?.available,inboxPending:context.inboxPending,learnings:context.learnings});
       }
       if(name==='accord_host')return c.host();
       if(name==='accord_board')return c.board(args.after);
