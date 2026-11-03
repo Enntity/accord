@@ -74,6 +74,8 @@ test('historical journals do not stop new work; replay keys persist and active q
  assert(f.s.submit(f.a,{...replayBody,key:'new-task'}).taskId);
  assert(f.c.reserve(f.a,{key:'new-reservation',resource:'artifact'}).id);
  assert(managers.reserve(f.a,{key:'new-manager',resource:'fleet:pair'}).id);
+ f.s.provision('recipient','fixture-recipient-token','worker');
+ f.c.announce({id:'recipient',role:'worker'},{key:'recipient-ready',label:'recipient',activity:'available'});
  assert(f.c.send(f.a,{key:'new-send',to:f.s.authority+'/recipient',text:'Hello'}).id);
  // Completed history was retained; reaching the active limit still backpressures.
  assert.equal(db.prepare("SELECT count(*) n FROM commands WHERE key LIKE 'past-%'").get().n,100001);

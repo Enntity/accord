@@ -198,7 +198,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     if(operation==='overseer-signal')return overseer.signal(actor,args);
     if(operation==='announce'){const result=collaboration.announce(actor,args);awareness.announce(actor,args);return result;}
     if(operation==='find'){const result=await collaboration.find(args.query??'',true,collaboration.address(actor));return args.detail===true?result:compactFind(result,args.query??'');}
-    if(operation==='send'){const r=collaboration.send(actor,args);void collaboration.flush().catch(()=>{});return r;}
+    if(operation==='send'){const r=collaboration.send(actor,args);void collaboration.flush().catch(()=>{});return collaboration.sent(actor,r.id);}
     if(operation==='inbox'){
       integer(args.waitMs??0,'waitMs',0,3600000);
       if(args.waitMs)await attention.wait(()=>collaboration.pendingCount(actor)>0||null,args.waitMs,signal,actor.id);
@@ -405,13 +405,15 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     requireThat(false, 'NOT_FOUND', 'Unknown route', 404);
     };
     const pending=()=>{try{return collaboration.pendingCount(responseActor);}catch{return 'unknown';}};
+    const deliveryProblems=()=>collaboration.deliveryProblems(responseActor);
     let result;
-    try{result=await handle();}catch(error){if(responseActor?.role==='worker')error.inboxPending=pending();throw error;}
+    try{result=await handle();}catch(error){if(responseActor?.role==='worker'){error.inboxPending=pending();error.deliveryProblems=deliveryProblems();}throw error;}
     // One indexed local count, no extra client request, no body duplication.
     // Discovery, federation and operator views never inherit another actor's mail.
     if(responseActor?.role==='worker'&&result&&typeof result==='object') {
       const inboxPending=pending();
-      if(inboxPending)return {...result,inboxPending};
+      const problems=deliveryProblems();
+      if(inboxPending||problems)return {...result,...(inboxPending?{inboxPending}:{}),...(problems?{deliveryProblems:problems}:{})};
     }
     return result;
   });

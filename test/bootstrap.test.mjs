@@ -96,7 +96,7 @@ test('two independent hosts share discovery; partitions and wrong authority stay
 });
 test('MCP stdio discovers tools and creates a session without exposing credentials', {timeout:10000},async t=>{
   const h=await harness();t.after(()=>h.close());const installed=setup(h);
-  const child=spawn(process.execPath,[cli,'mcp','--profile',installed.profile],{stdio:['pipe','pipe','pipe']});t.after(()=>stop(child));
+  const child=spawn(process.execPath,[cli,'mcp','--profile',installed.profile],{stdio:['pipe','pipe','pipe'],env:{...process.env,ACCORD_SESSION_FILE:'',CODEX_THREAD_ID:'',CLAUDE_SESSION_ID:'',ZCODE_SESSION_ID:'',TESSERA_TILE_ID:''}});t.after(()=>stop(child));
   let output='',error='';child.stdout.on('data',c=>output+=c);child.stderr.on('data',c=>error+=c);
   child.stdin.write(JSON.stringify({jsonrpc:'2.0',id:1,method:'initialize',params:{protocolVersion:'2025-06-18'}})+'\n');
   child.stdin.write(JSON.stringify({jsonrpc:'2.0',id:2,method:'tools/list'})+'\n');
