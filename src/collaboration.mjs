@@ -130,12 +130,23 @@ export class Collaboration {
     for(const host of hosts)Object.assign(host,splitDiscovery([...(host.participants??[]),...(host.observations??[])],selfAddress));
     return {hosts,participants:hosts.flatMap(h=>h.participants),observations:hosts.flatMap(h=>h.observations),guidance:discoveryGuidance};
   }
+  recipientExists(recipient) {
+    // Enrollment is enough to receive a reply, including legacy sessions that
+    // sent after reconnect without announcing again. Directory presence is UI.
+    return this.db.prepare('SELECT 1 FROM sessions WHERE id=? UNION SELECT 1 FROM participants WHERE actor=? LIMIT 1').get(recipient,recipient);
+  }
+  deliveryProblems(actor) {
+    const rows=this.db.prepare("SELECT id,error FROM message_outbox WHERE actor=? AND state='queued' AND (error IS NOT NULL OR created_at<?) ORDER BY created_at LIMIT 4").all(actor.id,this.store.now()-30000);
+    if(!rows.length)return;
+    return {messages:rows.slice(0,3).map(r=>({id:r.id,reason:r.error??'DELIVERY_PENDING'})),...(rows.length>3?{more:true}:{}),next:'Delivery is pending; do not resend with a new key. Check accord_more: accord_sent with id.'};
+  }
   send(actor,body) {
     return this.store.command(actor,body,'send',()=>{
       text(body.to,'to',220);text(body.text,'text',4000);
       requireThat(body.to.split('/').length===2,'INVALID_INPUT','Use the recipient address from find',400);
       requireThat(body.to!==this.address(actor),'SELF_MESSAGE','Send to another participant; self-messages are not supported',400);
-      const authority=body.to.split('/')[0];
+      const [authority,recipient]=body.to.split('/');
+      if(authority===this.store.authority)requireThat(this.recipientExists(recipient),'RECIPIENT_UNKNOWN','Recipient is not registered; use an address from find or a received message',404);
       requireThat(authority===this.store.authority||this.db.prepare('SELECT 1 FROM links WHERE authority=?').get(authority),'HOST_UNKNOWN','Recipient host is not linked',404);
       requireThat(this.db.prepare("SELECT count(*) n FROM message_outbox WHERE state='queued'").get().n<100000,'CAPACITY_LIMIT','Pending message limit reached');
       requireThat(body.delivery===undefined||['inbox','native-prompt'].includes(body.delivery),'INVALID_INPUT','Unknown delivery preference',400);
@@ -147,7 +158,7 @@ export class Collaboration {
   deliver(envelope) {
     text(envelope.id,'id',128);text(envelope.from,'from',220);text(envelope.text,'text',4000);
     const [authority,recipient]=String(envelope.to).split('/');
-    requireThat(authority===this.store.authority&&this.db.prepare('SELECT 1 FROM participants WHERE actor=?').get(recipient),'RECIPIENT_UNKNOWN','Recipient is not registered',404);
+    requireThat(authority===this.store.authority&&this.recipientExists(recipient),'RECIPIENT_UNKNOWN','Recipient is not registered',404);
     const from=this.principal(envelope.from),to=this.principal(envelope.to);
     const conversation=this.messages.createConversation(from,{members:[to.handle]});
     this.messages.sendMessage(from,{conversationId:conversation.id,clientMessageId:envelope.id,body:envelope.text,data:{id:envelope.id,from:envelope.from,to:envelope.to,kind:envelope.kind,delivery:envelope.delivery==='native-prompt'?'native-prompt':'inbox'}});

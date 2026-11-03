@@ -20,10 +20,10 @@ const hostLists=hosts=>{
   const known=new Map();for(const h of hosts)if(h.status==='unknown'||!known.has(h.authority))known.set(h.authority,h.status);
   return clean({hosts:[...known.keys()],unknownHosts:[...known].filter(([,s])=>s==='unknown').map(([a])=>a)});
 };
-export function bootstrap({address,announced,participants=[],resourceList,pools,hosts=[],recent,observed,inboxPending,learnings}){
+export function bootstrap({address,announced,participants=[],resourceList,pools,hosts=[],recent,observed,inboxPending,deliveryProblems,learnings}){
   const peers=participants.slice(0,5).map(participant);
   return {participants:peers,...clean({address,announced:announced||undefined,moreParticipants:Math.max(0,(recent??peers.length)-peers.length)||undefined,
-    ...resources(resourceList,pools),...hostLists(hosts),observed:observed||undefined,inboxPending:inboxPending||undefined,
+    ...resources(resourceList,pools),...hostLists(hosts),observed:observed||undefined,inboxPending:inboxPending||undefined,deliveryProblems,
     learnings:(learnings??[]).slice(0,5).map(l=>clean({name:l.name,type:l.type,description:clip(l.description,120),source:l.source,updated:l.updated}))})};
 }
 export function find(result,query=''){
@@ -32,7 +32,7 @@ export function find(result,query=''){
   const hostMap=new Map();for(const h of hosts)if(h.status==='unknown'||!hostMap.has(h.authority))hostMap.set(h.authority,{authority:h.authority,status:h.status,...(h.reason?{reason:h.reason}:{})});
   const view=clean({participants:matched.slice(0,limit).map(participant),moreParticipants:(result.moreParticipants??0)+Math.max(0,matched.length-limit)||undefined,
     ...resources(result.resources??hosts.flatMap(h=>h.resources??[]),result.pools),hosts:[...hostMap.values()],
-    observed:(result.observed??result.observations?.length)||undefined,inboxPending:result.inboxPending,
+    observed:(result.observed??result.observations?.length)||undefined,inboxPending:result.inboxPending,deliveryProblems:result.deliveryProblems,
     moreResources:result.moreResources,
     next:'Observers are history, not extra peers. Search history with accord_sessions; use accord_resources for full resources.'});
   // Bound Unicode and large fleets too. Counts explicitly signal omitted records.

@@ -27,13 +27,29 @@ provide defaults, but callers should retain explicit keys for ambiguous retries.
 
 A participant is the authenticated session, addressed as `host-authority/session-id`.
 Labels and advertised capabilities never establish identity or grant authority.
-MCP creates one session per connection. `accord run` shares its private session file
-with subprocesses; explicit shell sessions can reconnect to the same inbox. A new
-session is a new participant, not a guessed continuation of another with the same
-name. Ordinary enrollment sessions persist until explicitly closed. A trusted
+MCP reuses a persistent session when its trusted launcher supplies a native
+conversation ID: `CODEX_THREAD_ID`, `CLAUDE_SESSION_ID`, `ZCODE_SESSION_ID`, or
+`TESSERA_TILE_ID`. ZCode also supplies `com.zcode/request-context.session_id`
+in MCP call metadata; Codex desktop supplies `threadId` in its native MCP metadata.
+Each conversation gets its own client even on a pooled
+transport. These IDs never come from model tool arguments. Closing or crashing
+the transport does not close the native conversation. Explicit session closure
+still takes effect and cannot be undone by reconnecting.
+
+`accord run` shares its private session file with subprocesses. Without a native
+ID or inherited session, MCP creates an isolated session per connection. A new
+session is a new participant, not a guessed continuation with the same name. Ordinary enrollment sessions persist until explicitly closed. A trusted
 native conversation binding lets a reconnecting client read its prior unread
 mail. This does not revive old credentials or transfer resource ownership.
 Unbound sessions do not inherit mail based on matching names or directories.
+
+Enrollment makes a session replyable immediately; announcing controls directory
+metadata, not mailbox existence. Invalid local recipients fail the send immediately.
+Remote failures remain durably queued and retry automatically. Ordinary API/tool
+responses include a bounded `deliveryProblems` hint when outbound delivery fails
+or stays queued for 30 seconds. It contains IDs/reasons, never message bodies;
+`accord_more` with `tool: "accord_sent"` and `args: {id}` inspects one delivery.
+Retry uncertain sends with the original key, not a new duplicate request.
 
 Presence describes observations: recent announcement, unknown after two minutes
 without one, or offline after session close/expiry. It is not a process liveness

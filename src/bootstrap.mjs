@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync } from 'nod
 import { dirname, join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { AccordClient } from './client.mjs';
-import { loopbackUrl, request, requireThat } from './common.mjs';
+import { loopbackUrl, request, requireThat, hash } from './common.mjs';
 
 export function profileAt(path) {
   const profile = JSON.parse(readFileSync(path, 'utf8'));
@@ -18,11 +18,11 @@ export async function discover(profile) {
   requireThat(host.authority === profile.authority, 'AUTHORITY_MISMATCH', 'Pinned host identity changed');
   return host;
 }
-export async function enrollProfile(path, {label = 'agent', harness = 'cli', ttlMs, key} = {}) {
+export async function enrollProfile(path, {label = 'agent', harness = 'cli', ttlMs, key, nativeIdentity} = {}) {
   const profile = profileAt(path);
   const client = await AccordClient.enroll(profile.url, readFileSync(profile.enrollmentFile, 'utf8').trim(),
     {authority:profile.authority, label, harness, ttlMs, key});
-  await bindNativeSession(profile,client);
+  await bindNativeSession(profile,client,nativeIdentity);
   return client;
 }
 export function notice(host) {
@@ -72,9 +72,14 @@ export function inheritedClient() {
 
 // A trusted local launcher supplies native IDs from its environment, never from
 // a model tool argument or a guessed working-directory/name match.
-export async function bindNativeSession(profile,client){
+export function nativeSessionIdentity(env=process.env){
+  for(const [source,id] of [['codex',env.CODEX_THREAD_ID],['claude',env.CLAUDE_SESSION_ID],['zcode',env.ZCODE_SESSION_ID],['tessera',env.TESSERA_TILE_ID]])
+    if(id)return {source,id};
+}
+export const nativeEnrollmentKey=identity=>`mcp-native:${hash(JSON.stringify([identity.source,identity.id]))}`;
+export async function bindNativeSession(profile,client,nativeIdentity){
   if(!profile.endpointFile)return;
-  const bindings=[['codex',process.env.CODEX_THREAD_ID],['claude',process.env.CLAUDE_SESSION_ID],['tessera',process.env.TESSERA_TILE_ID]].filter(([,id])=>id);
+  const bindings=nativeIdentity?[[nativeIdentity.source,nativeIdentity.id]]:[['codex',process.env.CODEX_THREAD_ID],['claude',process.env.CLAUDE_SESSION_ID],['tessera',process.env.TESSERA_TILE_ID]].filter(([,id])=>id);
   if(!bindings.length)return;
   const admin=readFileSync(join(dirname(profile.endpointFile),'admin.token'),'utf8').trim();
   for(const [source,externalId] of bindings)await request(profile.url,admin,'/v1/collaboration',{operation:'session-bind',args:{key:`bind:${client.session.sessionId}:${source}`,source,externalId,actor:client.session.sessionId}});
