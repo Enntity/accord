@@ -81,7 +81,8 @@ Codex filters MCP subprocess environments, so its installed registration explici
 forwards five `ACCORD_*` variables (the session ID,
 session file, context file, profile, and URL). No credential value is placed in
 Codex configuration. Reinstalling upgrades the exact earlier Accord registration
-with a backup; customized conflicting entries still require manual resolution.
+with a backup, including one an install from another folder or Node wrote, and its
+service file; customized conflicting entries still require manual resolution.
 
 Shell agents can use `accord claim`, `wait`, `inspect`, `checkpoint`, `renew`,
 `write`, and `finish`; see `accord --help`. Mutations require an explicit `--key`

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Installer behavior follows Tessera: explicit plan, preserved configuration, CLI + skill + MCP.
-import { agentClients } from './client-install.mjs';
+import { agentClients,earlier,movedEntry,namedIn } from './client-install.mjs';
 import { existsSync, accessSync, constants, lstatSync, readFileSync, writeFileSync, mkdirSync, renameSync, copyFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -76,19 +76,25 @@ continue work that needs no shared resource.
     const path=join(home,'.claude.json');safePath(path);
     const config=existsSync(path)?JSON.parse(readFileSync(path,'utf8')):{};
     const existing=config.mcpServers?.accord;
-    requireThat(!existing||JSON.stringify(existing)===JSON.stringify(registration),'INSTALL_CONFLICT','Existing Claude Accord MCP registration differs');
+    requireThat(!existing||JSON.stringify(existing)===JSON.stringify(registration)||movedEntry(existing,registration),'INSTALL_CONFLICT','Existing Claude Accord MCP registration differs');
     config.mcpServers={...config.mcpServers,accord:registration};add(path,JSON.stringify(config,null,2)+'\n',{merge:true});
   }
   if(clients.includes('codex')){
     const path=join(home,'.codex','config.toml');safePath(path);
     const old=existsSync(path)?readFileSync(path,'utf8'):'';
-    const previousBlock=`[mcp_servers.accord]\ncommand = ${JSON.stringify(registration.command)}\nargs = ${JSON.stringify(registration.args)}\ntool_timeout_sec = 40\n`;
-    const block=previousBlock.replace('tool_timeout_sec = 40', 'env_vars = ["ACCORD_SESSION_FILE", "ACCORD_CONTEXT_FILE", "ACCORD_SESSION_ID", "ACCORD_PROFILE", "ACCORD_URL", "CODEX_THREAD_ID", "CLAUDE_SESSION_ID", "TESSERA_TILE_ID"]\ntool_timeout_sec = 40');
-    const oldEnvBlock=block.replace(', \"CODEX_THREAD_ID\", \"CLAUDE_SESSION_ID\", \"TESSERA_TILE_ID\"','');
+    // Every block shape an earlier install may have written, newest first.
+    const blocks=({command,args})=>{
+      const previous=`[mcp_servers.accord]\ncommand = ${JSON.stringify(command)}\nargs = ${JSON.stringify(args)}\ntool_timeout_sec = 40\n`;
+      const block=previous.replace('tool_timeout_sec = 40', 'env_vars = ["ACCORD_SESSION_FILE", "ACCORD_CONTEXT_FILE", "ACCORD_SESSION_ID", "ACCORD_PROFILE", "ACCORD_URL", "CODEX_THREAD_ID", "CLAUDE_SESSION_ID", "TESSERA_TILE_ID"]\ntool_timeout_sec = 40');
+      return [block,previous,block.replace(', \"CODEX_THREAD_ID\", \"CLAUDE_SESSION_ID\", \"TESSERA_TILE_ID\"','')];
+    };
+    const [block]=blocks(registration);
     if(/(?:\[\s*["']?mcp_servers["']?\s*\.\s*["']?accord["']?(?:\s*\]|\s*\.)|^\s*["']?mcp_servers["']?\s*=)/m.test(old)){
-      requireThat(old.includes(block)||old.includes(previousBlock)||old.includes(oldEnvBlock),'INSTALL_CONFLICT','Existing Codex Accord MCP registration differs');
-      if(old.includes(block))plan.push({path,action:'unchanged'});
-      else add(path,old.includes(oldEnvBlock)?old.replace(oldEnvBlock,block):old.replace(previousBlock,block),{merge:true});
+      const prior=namedIn(old,'[mcp_servers.accord]');
+      const from=[...blocks(registration),...(earlier(prior,registration)?blocks(prior):[])].find(b=>old.includes(b));
+      requireThat(from,'INSTALL_CONFLICT','Existing Codex Accord MCP registration differs');
+      if(from===block)plan.push({path,action:'unchanged'});
+      else add(path,old.replace(from,()=>block),{merge:true});
     }else add(path,old+(old.endsWith('\n')?'':'\n')+'\n'+block,{merge:true});
   }
   for(const [source,path] of [['claude',join(home,'.claude','settings.json')],['codex',join(home,'.codex','hooks.json')]]){

@@ -57,7 +57,8 @@ try {
     result.sensors=buildSensors({output:sensorPath(directory),dryRun});
     if(!argv.includes('--no-start'))result.service=installService({home,data:directory,dryRun,enable:true});
     // A restart recovers held reservations, so an upgrade leaves the moment to the operator.
-    if(result.service?.alreadyRunning)result.next=`Restart Accord to finish an upgrade, when nothing is reserved: ${process.platform==='darwin'?'launchctl kickstart -k gui/$(id -u)/org.enntity.accord':'systemctl --user restart accord.service'}`;
+    // launchd keeps the definition it loaded, so a moved service file needs a reload, not a restart.
+    if(result.service?.alreadyRunning)result.next=`Restart Accord to finish an upgrade, when nothing is reserved: ${process.platform!=='darwin'?'systemctl --user restart accord.service':result.service.replaced?`launchctl bootout gui/$(id -u)/org.enntity.accord && launchctl bootstrap gui/$(id -u) '${result.service.path}'`:'launchctl kickstart -k gui/$(id -u)/org.enntity.accord'}`;
     console.log(JSON.stringify(result,null,2));
   } else if(command==='session'){
     const path=resolve(option('session-file',join(home,'.config','accord','shell-session.json')));
@@ -212,8 +213,9 @@ try {
   } else if (command === 'up') {
     configuration(directory); // explicit initialization; no overwrite or hidden enrollment
     const driver = child('driver', ['--port', option('driver-port', '8788')]);
-    let service,links;
-    const stop = () => { links?.stop(); service?.kill('SIGTERM'); driver.kill('SIGTERM'); };
+    let service,links,stopping=false;
+    const stop = () => { if (stopping) return; stopping = true; links?.stop(); service?.kill('SIGTERM'); driver.kill('SIGTERM'); };
+    const exited = proc => proc.exitCode !== null || proc.signalCode !== null ? Promise.resolve() : new Promise(r => proc.once('exit', r));
     process.on('SIGTERM', stop); process.on('SIGINT', stop);
     try {
       const d = await readyChild(driver);
@@ -224,9 +226,12 @@ try {
       // Saved links belong to the installed host, never to a scratch --data directory.
       if(existsSync(profilePath)&&JSON.parse(readFileSync(profilePath,'utf8')).authority===configuration(directory).authority)links=superviseLinks({home,data:directory});
       // The supervisor shuts down its owned children when either service exits.
-      await Promise.race([new Promise(r => driver.once('exit', r)), new Promise(r => service.once('exit', r))]);
-      process.exitCode=1; // Let the service manager restart after an unexpected child exit.
-    } finally { stop(); }
+      await Promise.race([exited(driver), exited(service)]);
+      if (!stopping) process.exitCode=1; // Let the service manager restart after an unexpected child exit.
+    } finally {
+      // Exit only once both have let go of their ports, so a restart never meets a held one.
+      stop(); await Promise.all([driver,service].filter(Boolean).map(exited));
+    }
   } else if (['board','submit','pause','resume','artifact'].includes(command)) {
     const inherited=Boolean(process.env.ACCORD_SESSION_FILE);
     const config = inherited ? null : configuration(directory);
