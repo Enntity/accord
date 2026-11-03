@@ -39,3 +39,18 @@ test('managed provider: actual old process stops and restoration succeeds before
   assert.equal(starts,1);await assert.rejects(a.collaborate('start',{id:ra.id,key:'again'}));
   await b.release(rb.id);await eventually(async()=>(await b.reservation(rb.id)).state==='released');
 });
+
+test('managed provider declares its own maximum ownership and can change it without re-registering the asset',async t=>{
+  const h=await harness();t.after(()=>h.close());
+  const tokenFile=join(h.data,'provider.token');writeFileSync(tokenFile,'provider-test',{mode:0o600});
+  const admin=h.client('admin'),manifest={schema:1,id:'pair',asset:'fixture:pair',plugin:'managed-http',endpoint:'http://127.0.0.1:9/pair',tokenFile};
+  const limit=async()=>(await admin.resources()).resources.find(r=>r.localId==='pair').maxOwnershipMs;
+  const first=await admin.registerResource({...manifest,maxOwnershipMs:43200000});
+  assert.equal(first.maxOwnershipMs,43200000);assert.equal(await limit(),43200000);
+  const second=await admin.registerResource({...manifest,maxOwnershipMs:43200000,allowIndefinite:true});
+  assert.equal(second.instance,first.instance);assert.equal(second.allowIndefinite,true);assert.equal(await limit(),null,'an indefinite resource has no maximum');
+  await admin.registerResource(manifest);assert.equal(await limit(),28800000,'a resource that declares nothing keeps the eight-hour default');
+  await assert.rejects(admin.registerResource({...manifest,endpoint:'http://127.0.0.1:9/other',maxOwnershipMs:43200000}),{code:'RESOURCE_CONFLICT'});
+  await assert.rejects(admin.registerResource({...manifest,maxOwnershipMs:1000}),{code:'INVALID_INPUT'});
+  await assert.rejects(admin.registerResource({...manifest,allowIndefinite:'yes'}),{code:'RESOURCE_MANIFEST'});
+});

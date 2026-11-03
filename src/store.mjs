@@ -54,7 +54,9 @@ export class Store {
       `CREATE TABLE memory_entries(id TEXT PRIMARY KEY, source TEXT NOT NULL, name TEXT NOT NULL, type TEXT NOT NULL,
         description TEXT NOT NULL, updated TEXT NOT NULL, hash TEXT NOT NULL, path TEXT NOT NULL, scope TEXT NOT NULL DEFAULT 'shared',
         stale INTEGER NOT NULL DEFAULT 0);
-      CREATE INDEX memory_entries_updated ON memory_entries(updated DESC);`]); this.now = now; this.leaderMs = leaderMs;
+      CREATE INDEX memory_entries_updated ON memory_entries(updated DESC);`,
+      // NULL declares nothing, so the reservation default applies.
+      "ALTER TABLE resource_bindings ADD COLUMN max_ownership_ms INTEGER;ALTER TABLE resource_bindings ADD COLUMN allow_indefinite INTEGER NOT NULL DEFAULT 0;"]); this.now = now; this.leaderMs = leaderMs;
     transaction(this.db, () => {
       this.db.prepare("INSERT OR IGNORE INTO meta VALUES('authority',?)").run(id());
       this.db.prepare("INSERT OR IGNORE INTO meta VALUES('paused','false')").run();
@@ -137,12 +139,15 @@ export class Store {
       const old=this.db.prepare('SELECT * FROM resource_bindings WHERE id=? OR asset=?').get(binding.id,binding.asset);
       requireThat(!old||['id','instance','plugin','asset','enforcement'].every(k=>old[k]===binding[k]),'RESOURCE_CONFLICT','Resource binding changed');
       this.db.prepare('INSERT OR IGNORE INTO resources(id) VALUES(?)').run(binding.id);
-      this.db.prepare('INSERT OR IGNORE INTO resource_bindings VALUES(?,?,?,?,?)').run(binding.id,binding.instance,binding.plugin,binding.asset,binding.enforcement);
+      this.db.prepare('INSERT OR IGNORE INTO resource_bindings(id,instance,plugin,asset,enforcement) VALUES(?,?,?,?,?)').run(binding.id,binding.instance,binding.plugin,binding.asset,binding.enforcement);
+      this.db.prepare('UPDATE resource_bindings SET max_ownership_ms=?,allow_indefinite=? WHERE id=?').run(binding.maxOwnershipMs??null,binding.allowIndefinite?1:0,binding.id);
       if(body.pool)this.db.prepare('INSERT OR IGNORE INTO resource_pools VALUES(?,?)').run(binding.id,body.pool);
       this.emit('resource.registered',binding);return binding;
     });
   }
   binding(resource){return this.db.prepare('SELECT * FROM resource_bindings WHERE id=?').get(resource);}
+  // A reservation may hold a resource as long as the resource declares; null means indefinitely.
+  ownershipLimit(resource){const b=this.binding(resource);return b?.allow_indefinite?null:b?.max_ownership_ms??28800000;}
   takeLeadership() {
     this.leaderToken = id();
     transaction(this.db, () => {
@@ -260,7 +265,8 @@ export class Store {
       const reservation=this.task(claim.task_id).kind==='reservation';
       integer(body.leaseMs, 'leaseMs', 500, reservation?300000:30000);
       const deadline = Math.max(claim.deadline, this.now() + body.leaseMs);
-      requireThat(deadline <= claim.created_at + (reservation?28800000:300000), 'ATTEMPT_LIMIT', 'Ownership reached its maximum duration; release and requeue');
+      const limit = reservation ? this.ownershipLimit(claim.resource) : 300000;
+      requireThat(limit === null || deadline <= claim.created_at + limit, 'ATTEMPT_LIMIT', 'Ownership reached its maximum duration; release and requeue');
       this.db.prepare('UPDATE claims SET deadline=? WHERE id=?').run(deadline, claimId);
       this.emit('claim.renewed', { claim: claimId, deadline }); return { deadline };
     });

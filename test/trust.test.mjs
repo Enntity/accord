@@ -77,7 +77,7 @@ test('an upgraded host keeps sharing with the links it already had',t=>{
   const dir=mkdtempSync(join(tmpdir(),'accord-share-')),file=join(dir,'c.sqlite');t.after(()=>rmSync(dir,{recursive:true,force:true}));
   const seed=new Store(file);seed.close();
   const old=new DatabaseSync(file);
-  old.exec("ALTER TABLE links DROP COLUMN share_sessions;DROP TABLE memory_entries;DELETE FROM migrations WHERE version>=13;INSERT INTO links VALUES('peer','http://127.0.0.1:1','o','i');");old.close();
+  old.exec("ALTER TABLE links DROP COLUMN share_sessions;DROP TABLE memory_entries;ALTER TABLE resource_bindings DROP COLUMN max_ownership_ms;ALTER TABLE resource_bindings DROP COLUMN allow_indefinite;DELETE FROM migrations WHERE version>=13;INSERT INTO links VALUES('peer','http://127.0.0.1:1','o','i');");old.close();
   const current=new Store(file);
   assert.equal(current.db.prepare('SELECT share_sessions s FROM links').get().s,1);
   current.db.exec("INSERT INTO links(authority,url,outbound,inbound_hash) VALUES('new','http://127.0.0.1:2','o2','i2')");

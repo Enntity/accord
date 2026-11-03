@@ -116,7 +116,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
       const origin=holder&&store.db.prepare('SELECT authority,session_id FROM remote_routes WHERE actor=?').get(holder.actor);
       const queue=store.db.prepare("SELECT r.id,r.actor,r.queued_until queuedUntil,t.title purpose,t.created_at queuedAt FROM reservations r JOIN tasks t ON t.id=r.task_id WHERE t.resource=? AND r.pool IS NULL AND t.state='queued' ORDER BY t.created_at,t.rowid LIMIT 100").all(resource.id);
       return {id:`${store.authority}/${resource.id}`,localId:resource.id,...(resource.pool?{pool:resource.pool}:{}),plugin:resource.plugin??'artifact',asset:resource.asset??'builtin:artifact',
-        label:status?.label??resource.id,externalWorkloads:status?.externalWorkloads??null,hosts:status?.hosts??[],queue,state:!driverError&&!status?.blocked&&!holder&&!status.claim_id?(queue.length?'queued':'unclaimed'):holder?'held':'unknown',enforcement:resource.enforcement??'artifact-API',driver:driverError||'reachable',
+        label:status?.label??resource.id,maxOwnershipMs:store.ownershipLimit(resource.id),externalWorkloads:status?.externalWorkloads??null,hosts:status?.hosts??[],queue,state:!driverError&&!status?.blocked&&!holder&&!status.claim_id?(queue.length?'queued':'unclaimed'):holder?'held':'unknown',enforcement:resource.enforcement??'artifact-API',driver:driverError||'reachable',
         holder:holder?{claim:holder.id,actor:holder.actor,address:origin?`${origin.authority}/${origin.session_id}`:`${store.authority}/${holder.actor}`,label:session?.label??holder.actor,generation:holder.generation,state:holder.state,deadline:holder.deadline,task:holder.task_id}:null};
     }));
     store.assertLeader();
