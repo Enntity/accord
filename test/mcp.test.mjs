@@ -23,6 +23,19 @@ async function bridge(t,bootstrapArgs={}) {
   return {h,child,replies,send,call,diagnostics:()=>diagnostics};
 }
 
+test('MCP reservations default to windows and extension preserves the live grant',async t=>{
+  const b=await bridge(t);
+  b.call(3,'accord_reserve',{resource:'artifact',key:'window'});await eventually(()=>b.replies.has(3));
+  const get=id=>{const result=b.replies.get(id).result;assert(!result.isError,JSON.stringify(result));return JSON.parse(result.content[0].text);};
+  const first=get(3);assert.equal(first.state,'running');assert.equal(first.mode,'window');assert.equal(first.renewalRequired,false);
+  assert(first.deadline>Date.now()+59*60000);
+  b.call(4,'accord_extend',{id:first.id,durationMs:5400000,key:'longer'});await eventually(()=>b.replies.has(4));
+  assert(get(4).deadline>first.deadline);
+  b.call(5,'accord_reservation',{id:first.id});await eventually(()=>b.replies.has(5));
+  assert.equal(get(5).claimId,first.claimId);assert.equal(get(5).generation,first.generation);
+  b.call(6,'accord_release',{id:first.id});await eventually(()=>b.replies.has(6));get(6);
+});
+
 test('an MCP inbox wait keeps its advertised limit',async t=>{
   const b=await bridge(t);b.call(3,'accord_inbox',{waitMs:20001});await eventually(()=>b.replies.has(3));
   assert.equal(JSON.parse(b.replies.get(3).result.content[0].text).error.code,'INVALID_INPUT');
