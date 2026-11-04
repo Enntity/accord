@@ -142,3 +142,16 @@ test('linked managed serving uses one prepare for reserve, start and extension, 
   await eventually(async()=>(await b.reservation(q.id)).state==='failed');
   assert(log.includes('stop:2'));assert(log.includes('restore:2'));
 });
+
+test('preparing reservation renewal preserves identity and cannot revive expiry or evade limits',t=>{
+  const {store,c,a,b,reserve,time}=fixture(t),r=reserve({durationMs:undefined,leaseMs:1000});
+  time(700);
+  assert.throws(()=>store.renew(b,r.claimId,{key:'foreign-prepare',leaseMs:1000}),{code:'NOT_OWNER'});
+  assert.equal(store.renew(a,r.claimId,{key:'prepare',leaseMs:1000}).deadline,1700);
+  assert.equal(c.reservation(a,r.id).generation,r.generation);
+  assert.equal(c.reservation(a,r.id).state,'preparing');
+  assert.throws(()=>store.owned(a,r.claimId,true),{code:'STALE_CLAIM'},'renewal must not authorize workload launch');
+  assert.throws(()=>store.renew(a,r.claimId,{key:'limit-prepare',durationMs:9*3600000}),{code:'ATTEMPT_LIMIT'});
+  time(1700);
+  assert.throws(()=>store.renew(a,r.claimId,{key:'expired-prepare',leaseMs:1000}),{code:'STALE_CLAIM'});
+});
