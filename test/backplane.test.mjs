@@ -182,6 +182,7 @@ test("lease helper retains acquisition key through lost replies and reports unco
       return { id: "one" };
     },
     reservation: async () => ({ state: "running" }),
+    collaborate: async (operation) => { assert.equal(operation, "renew"); return {}; },
     release: async () => ({ state: "releasing" }),
   };
   await assert.rejects(

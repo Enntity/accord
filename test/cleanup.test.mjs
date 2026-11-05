@@ -64,7 +64,7 @@ test('historical journals do not stop new work; replay keys persist and active q
  db.exec(`${seq(10000)} INSERT INTO actors SELECT 'ended-'||x,'old-hash-'||x,'worker' FROM n`);
  db.exec(`${seq(10000)} INSERT INTO sessions(id,label,harness,created_at,expires_at,closed_at,persistent) SELECT 'ended-'||x,'old','test',0,1,1,0 FROM n`);
  db.exec(`${seq(5000)} INSERT INTO tasks(id,title,input,expected_hash,resource,state,created_at,max_attempts,kind) SELECT 'past-task-'||x,'done','a','hash','artifact','cancelled',0,1,'reservation' FROM n`);
- db.exec(`${seq(5000)} INSERT INTO reservations SELECT 'past-reservation-'||x,'a','past-task-'||x,1000,1000,NULL FROM n`);
+ db.exec(`${seq(5000)} INSERT INTO reservations(id,actor,task_id,lease_ms,queued_until,pool) SELECT 'past-reservation-'||x,'a','past-task-'||x,1000,1000,NULL FROM n`);
  db.exec(`${seq(5000)} INSERT INTO manager_requests(id,actor,manager,resource,payload,state,created_at,queued_until) SELECT 'past-manager-'||x,'a','fleet','pair','{}','released',0,1000 FROM n`);
  db.exec(`${seq(100000)} INSERT INTO message_outbox(id,actor,envelope,state,created_at) SELECT 'past-message-'||x,'a','{}','delivered',0 FROM n`);
  db.exec('COMMIT');

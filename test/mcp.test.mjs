@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {spawn} from 'node:child_process';
+import {spawn,spawnSync} from 'node:child_process';
+import {readFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {harness,eventually,stop} from './helpers.mjs';
@@ -20,8 +21,29 @@ async function bridge(t,bootstrapArgs={}) {
   const call=(id,name,args={})=>send(id,'tools/call',{name,arguments:args});
   send(1,'initialize',{protocolVersion:'2025-06-18'});call(2,'accord_bootstrap',bootstrapArgs);
   await eventually(()=>replies.has(2));assert(!replies.get(2).result.isError);
+  const expectedVersion=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8')).version;
+  assert.equal(replies.get(1).result.serverInfo.version,expectedVersion);
   return {h,child,replies,send,call,diagnostics:()=>diagnostics};
 }
+
+test('CLI reports the installed package version without needing a service',()=>{
+  const expected=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8')).version;
+  const result=spawnSync(process.execPath,[fileURLToPath(new URL('../src/cli.mjs',import.meta.url)),'--version'],{encoding:'utf8'});
+  assert.equal(result.status,0,result.stderr);assert.equal(result.stdout.trim(),expected);
+});
+
+test('MCP reservations default to windows and extension preserves the live grant',async t=>{
+  const b=await bridge(t);
+  b.call(3,'accord_reserve',{resource:'artifact',key:'window'});await eventually(()=>b.replies.has(3));
+  const get=id=>{const result=b.replies.get(id).result;assert(!result.isError,JSON.stringify(result));return JSON.parse(result.content[0].text);};
+  const first=get(3);assert.equal(first.state,'running');assert.equal(first.mode,'window');assert.equal(first.renewalRequired,false);
+  assert(first.deadline>Date.now()+59*60000);
+  b.call(4,'accord_extend',{id:first.id,durationMs:5400000,key:'longer'});await eventually(()=>b.replies.has(4));
+  assert(get(4).deadline>first.deadline);
+  b.call(5,'accord_reservation',{id:first.id});await eventually(()=>b.replies.has(5));
+  assert.equal(get(5).claimId,first.claimId);assert.equal(get(5).generation,first.generation);
+  b.call(6,'accord_release',{id:first.id});await eventually(()=>b.replies.has(6));get(6);
+});
 
 test('an MCP inbox wait keeps its advertised limit',async t=>{
   const b=await bridge(t);b.call(3,'accord_inbox',{waitMs:20001});await eventually(()=>b.replies.has(3));
