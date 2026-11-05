@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {spawn} from 'node:child_process';
+import {spawn,spawnSync} from 'node:child_process';
+import {readFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {harness,eventually,stop} from './helpers.mjs';
@@ -20,8 +21,16 @@ async function bridge(t,bootstrapArgs={}) {
   const call=(id,name,args={})=>send(id,'tools/call',{name,arguments:args});
   send(1,'initialize',{protocolVersion:'2025-06-18'});call(2,'accord_bootstrap',bootstrapArgs);
   await eventually(()=>replies.has(2));assert(!replies.get(2).result.isError);
+  const expectedVersion=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8')).version;
+  assert.equal(replies.get(1).result.serverInfo.version,expectedVersion);
   return {h,child,replies,send,call,diagnostics:()=>diagnostics};
 }
+
+test('CLI reports the installed package version without needing a service',()=>{
+  const expected=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8')).version;
+  const result=spawnSync(process.execPath,[fileURLToPath(new URL('../src/cli.mjs',import.meta.url)),'--version'],{encoding:'utf8'});
+  assert.equal(result.status,0,result.stderr);assert.equal(result.stdout.trim(),expected);
+});
 
 test('MCP reservations default to windows and extension preserves the live grant',async t=>{
   const b=await bridge(t);
