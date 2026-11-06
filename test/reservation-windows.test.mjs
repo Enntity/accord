@@ -9,7 +9,7 @@ import { Store } from '../src/store.mjs';
 import { Collaboration } from '../src/collaboration.mjs';
 import { AccordClient } from '../src/client.mjs';
 import { createHttp, listen, readBody } from '../src/common.mjs';
-import { harness, eventually, link } from './helpers.mjs';
+import { harness, eventually, link, stop, delay } from './helpers.mjs';
 
 const minute = 60000;
 test('v15 upgrade preserves an existing heartbeat deadline, generation and command history',t=>{
@@ -93,11 +93,37 @@ test('windows obey input bounds and resource ownership policy, including policy 
   assert.throws(()=>store.renew(a,active.claimId,{key:'too-long',durationMs:9*3600000}),{code:'ATTEMPT_LIMIT'});
 });
 
-test('session revocation and coordinator recovery still revoke bounded windows',t=>{
+test('session revocation and an ended window still revoke bounded windows',t=>{
   const {store,reserve,time}=fixture(t),r=reserve();store.activated(r.claimId);
   store.revokeSession('a');assert.equal(store.claim(r.claimId).state,'revoking');store.released(r.claimId);
   const next=reserve({key:'second'});store.activated(next.claimId);
   time(2*86400000+1);store.takeLeadership();assert.equal(store.claim(next.claimId).state,'revoking');
+});
+
+test('a coordinator restart resumes an unexpired window under the same claim, and still fences heartbeats and tasks',t=>{
+  const {store,c,a,reserve,time}=fixture(t),admin={id:'admin',role:'admin'};
+  const bind=id=>store.registerResource(admin,{key:`bind:${id}`},{id,instance:id,plugin:'cooperative',asset:`fixture:${id}`,enforcement:'test'});
+  bind('beat');bind('job');
+  const window=reserve();store.activated(window.claimId);
+  const beat=c.reserve(a,{key:'beat',resource:'beat',leaseMs:5*minute});c.schedule();
+  const beatClaim=c.reservation(a,beat.id).claimId;store.activated(beatClaim);
+  const {taskId}=store.submit(admin,{key:'job',title:'job',input:'x',resource:'job',expectedHash:'0'.repeat(64)});
+  const job=store.acquire(a,{key:'take-job',taskId,leaseMs:30000});store.activated(job.claimId);
+  // An OOM kill or supervisor restart: the lease lapses and a new epoch takes over.
+  time(10*minute);store.releaseLeadership();store.takeLeadership();
+  const resumed=store.claim(window.claimId);
+  assert.equal(resumed.state,'preparing','the driver must reconfirm before access resumes');
+  assert.equal(resumed.generation,window.generation);assert.equal(resumed.deadline,window.deadline);
+  assert.equal(c.reservation(a,window.id).state,'preparing');
+  assert.throws(()=>store.owned(a,window.claimId,true),{code:'STALE_CLAIM'});
+  store.activated(window.claimId);
+  assert.equal(c.reservation(a,window.id).state,'running');
+  assert.equal(store.renew(a,window.claimId,{key:'extend',durationMs:120*minute}).deadline,130*minute);
+  assert.equal(store.claim(beatClaim).state,'revoking');assert.equal(store.claim(job.claimId).state,'revoking');
+  // A driver that cannot resume the generation sends it back through revocation.
+  store.releaseLeadership();store.takeLeadership();store.refused(window.claimId,'REVOKED');
+  assert.equal(store.claim(window.claimId).state,'revoking');store.released(window.claimId);
+  assert.equal(c.reservation(a,window.id).state,'failed');
 });
 
 test('new clients refuse window requests on old hosts before mutating, while explicit heartbeat clients remain compatible',async()=>{
@@ -154,4 +180,30 @@ test('preparing reservation renewal preserves identity and cannot revive expiry 
   assert.throws(()=>store.renew(a,r.claimId,{key:'limit-prepare',durationMs:9*3600000}),{code:'ATTEMPT_LIMIT'});
   time(1700);
   assert.throws(()=>store.renew(a,r.claimId,{key:'expired-prepare',leaseMs:1000}),{code:'STALE_CLAIM'});
+});
+
+test('a cooperative window survives a crash of the whole host under the same claim',{timeout:30000},async t=>{
+  const h=await harness();t.after(()=>h.close());
+  await h.client('admin').registerResource({schema:1,id:'canary',asset:'fixture:canary',plugin:'cooperative'});
+  const a=h.client('agent-a'),r=await a.reserve('canary',{durationMs:3600000});
+  const before=await eventually(async()=>{const s=await a.reservation(r.id);return s.state==='running'&&s;});
+  const serverPort=Number(new URL(h.url).port),driverPort=Number(new URL(h.driverUrl).port);
+  await stop(h.server,'SIGKILL');await stop(h.driver,'SIGKILL');await delay(h.leaderMs+50);
+  await h.startDriver(driverPort);await h.startServer(serverPort);
+  const after=await eventually(async()=>{const s=await a.reservation(r.id);return s.state==='running'&&s;});
+  assert.equal(after.claimId,before.claimId);assert.equal(after.generation,before.generation);assert.equal(after.deadline,before.deadline);
+  await a.release(r.id);await eventually(async()=>(await a.reservation(r.id)).state==='released');
+});
+
+test('a holder that did not release is told when its window ends, and a released holder is not',{timeout:30000},async t=>{
+  const h=await harness();t.after(()=>h.close());
+  await h.client('admin').registerResource({schema:1,id:'canary',asset:'fixture:canary',plugin:'cooperative'});
+  const a=h.client('agent-a');await a.announce({label:'holder',activity:'testing'});
+  const kept=await a.reserve('canary',{durationMs:1500});
+  const notice=await eventually(async()=>(await a.inbox()).messages.find(m=>m.text.includes(kept.id)));
+  assert.match(notice.text,/ended as failed: its deadline passed/);
+  const released=await a.reserve('canary',{durationMs:60000});
+  await eventually(async()=>(await a.reservation(released.id)).state==='running');
+  await a.release(released.id);await eventually(async()=>(await a.reservation(released.id)).state==='released');
+  await delay(1500);assert(!(await a.inbox()).messages.some(m=>m.text.includes(released.id)));
 });

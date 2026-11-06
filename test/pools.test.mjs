@@ -54,13 +54,25 @@ test('the catalog summarises a pool once instead of listing a queue per slot',as
   assert.equal(catalog.pools[0].free,2);assert.equal(catalog.resources.filter(r=>r.pool==='gpus').length,3);
 });
 
-test('a queued pool reservation survives a coordinator restart',async t=>{
+test('a queued pool reservation survives a coordinator restart behind windows that keep their slots',async t=>{
   const f=await fixture(t,2),[a,b,c]=await Promise.all(['a','b','c'].map(f.agent));
   const ra=await a.reserve('gpus',{key:'a'});await f.running(a,ra.id);
   const rb=await b.reserve('gpus',{key:'b'});await f.running(b,rb.id);
   const rc=await c.reserve('gpus',{key:'c'});
   const port=Number(new URL(f.h.url).port);await stop(f.h.server);await f.h.startServer(port);
+  await eventually(async()=>(await f.state(a,ra.id))==='running'&&(await f.state(b,rb.id))==='running',12000);
+  assert.equal(await f.state(c,rc.id),'queued');
+  await a.release(ra.id);await eventually(async()=>(await f.state(c,rc.id))==='running',12000);
+});
+
+test('a coordinator restart fences heartbeat holders in a pool and seats the queued waiter',async t=>{
+  const f=await fixture(t,2),[a,b,c]=await Promise.all(['a','b','c'].map(f.agent));
+  const ra=await a.reserve('gpus',{key:'a',leaseMs:60000});await f.running(a,ra.id);
+  const rb=await b.reserve('gpus',{key:'b',leaseMs:60000});await f.running(b,rb.id);
+  const rc=await c.reserve('gpus',{key:'c'});
+  const port=Number(new URL(f.h.url).port);await stop(f.h.server);await f.h.startServer(port);
   await eventually(async()=>(await f.state(c,rc.id))==='running',12000);
+  assert.equal(await f.state(a,ra.id),'failed');
 });
 
 test('registration rejects bad capacities, name collisions and is idempotent',async t=>{

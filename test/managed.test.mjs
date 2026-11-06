@@ -1,11 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync } from 'node:fs';
+import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { harness,eventually,stop,delay } from './helpers.mjs';
 import { createHttp,listen,readBody } from '../src/common.mjs';
+import { ManagedDriver } from '../src/managed-driver.mjs';
 
 test('managed provider: actual old process stops and restoration succeeds before a second agent receives ownership, including crash recovery', {timeout:30000},async t=>{
   const h=await harness();t.after(()=>h.close());
@@ -53,4 +55,46 @@ test('managed provider declares its own maximum ownership and can change it with
   await assert.rejects(admin.registerResource({...manifest,endpoint:'http://127.0.0.1:9/other',maxOwnershipMs:43200000}),{code:'RESOURCE_CONFLICT'});
   await assert.rejects(admin.registerResource({...manifest,maxOwnershipMs:1000}),{code:'INVALID_INPUT'});
   await assert.rejects(admin.registerResource({...manifest,allowIndefinite:'yes'}),{code:'RESOURCE_MANIFEST'});
+});
+
+test('a window on a managed resource survives a crash of the whole host without stopping or restoring the provider',{timeout:30000},async t=>{
+  const h=await harness();t.after(()=>h.close());const log=[];
+  const provider=createHttp(async(req,res,url)=>{
+    const b=await readBody(req),action=url.pathname.slice(1);
+    if(action==='availability')return {available:true};
+    log.push(action+':'+b.generation);return {...b,[action]:true};
+  });
+  const endpoint=await listen(provider);t.after(()=>new Promise(r=>provider.close(r)));
+  const tokenFile=join(h.data,'provider.token');writeFileSync(tokenFile,'provider-test',{mode:0o600});
+  await h.client('admin').registerResource({schema:1,id:'pair',asset:'fixture:pair',plugin:'managed-http',endpoint,tokenFile});
+  const a=h.client('agent-a'),b=h.client('agent-b'),r=await a.reserve('pair',{durationMs:3600000});
+  const before=await eventually(async()=>{const s=await a.reservation(r.id);return s.state==='running'&&s;});
+  await a.collaborate('start',{id:r.id,key:'start'});
+  const next=await b.reserve('pair',{durationMs:60000});
+  // The kernel OOM killer takes the service; the supervisor restarts coordinator and driver together.
+  const serverPort=Number(new URL(h.url).port),driverPort=Number(new URL(h.driverUrl).port);
+  await stop(h.server,'SIGKILL');await stop(h.driver,'SIGKILL');await delay(h.leaderMs+50);
+  await h.startDriver(driverPort);await h.startServer(serverPort);
+  const after=await eventually(async()=>{const s=await a.reservation(r.id);return s.state==='running'&&s;});
+  assert.equal(after.claimId,before.claimId);assert.equal(after.generation,before.generation);assert.equal(after.deadline,before.deadline);
+  assert.equal((await b.reservation(next.id)).state,'queued');
+  assert.deepEqual(log,['prepare:1','start:1','prepare:1'],'the provider reconfirms the same generation and is never stopped or restored');
+  assert.equal((await a.collaborate('start',{id:r.id,key:'start'})).start,true,'the holder keeps using the same grant');
+  await a.release(r.id);await eventually(async()=>(await b.reservation(next.id)).state==='running');
+  assert(log.indexOf('restore:1')<log.indexOf('prepare:2'));
+});
+
+test('a restarted managed driver resumes only a grant its provider had confirmed',async t=>{
+  const dir=mkdtempSync(join(tmpdir(),'accord-managed-resume-')),file=join(dir,'driver.sqlite'),tokenFile=join(dir,'provider.token');
+  t.after(()=>rmSync(dir,{recursive:true,force:true}));writeFileSync(tokenFile,'fixture');
+  const manifest={schema:1,id:'pair',asset:'fixture:pair',plugin:'managed-http',endpoint:'http://127.0.0.1:9',tokenFile},credentialHash='a'.repeat(64);
+  const crash=phase=>{const d=new ManagedDriver(file,manifest);
+    d.db.prepare("UPDATE state SET authority='host',epoch=1,generation=1,claim_id='claim',token_hash=?,phase=?").run(credentialHash,phase);d.close();
+    return new ManagedDriver(file,manifest);};
+  const resume=d=>d.activate({instance:d.status().instance,authority:'host',epoch:2,generation:1,claimId:'claim',credentialHash});
+  const interrupted=crash('preparing');assert.equal(interrupted.status().phase,'interrupted');
+  await assert.rejects(resume(interrupted),{code:'REVOKED'});interrupted.close();
+  const confirmed=crash('active');assert.equal(confirmed.status().phase,'recovering');
+  await assert.rejects(resume(confirmed),e=>e.code!=='REVOKED','a confirmed grant goes back to its provider');
+  assert.equal(confirmed.status().phase,'preparing');assert.equal(confirmed.status().epoch,2);confirmed.close();
 });
