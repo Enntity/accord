@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- A coordinator restart, such as a supervisor restart after an OOM kill, no longer ends an
+  unexpired reservation window. The same claim and generation return to `preparing` and the
+  driver reconfirms them; managed and cooperative drivers do so across their own restart.
+  A driver that cannot resume the generation, such as a restarted process driver, gets it
+  revoked at once instead of left preparing until the deadline.
+- A holder that did not release is told when its reservation ends.
+
 ## 0.6.1
 
 - CLI and MCP reservations use a one-hour bounded window by default. Extend the same

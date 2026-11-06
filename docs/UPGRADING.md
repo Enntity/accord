@@ -3,9 +3,10 @@
 ## Before restarting
 
 Finish or release active reservations on the host you are upgrading. Coordinate with
-agents using resources on linked hosts. A coordinator restart fences unfinished grants;
-it does not preserve a running workload's permission to continue. Managed release can
-stop a workload and restore its provider.
+agents using resources on linked hosts. A coordinator restart fences unfinished tasks and
+heartbeat reservations; it does not preserve their permission to continue. An unexpired
+reservation window resumes once its driver reconfirms the same generation. Managed release
+can stop a workload and restore its provider.
 
 Keep the existing private data directory and connection profile. Do not initialize a
 second authority or copy tokens between hosts. Keep the previous package available for

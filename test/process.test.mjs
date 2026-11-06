@@ -170,3 +170,21 @@ test('replaced process database stays fenced and doctor reports degraded despite
   assert.equal(JSON.parse(result.stdout).status,'degraded');
   await assert.rejects(s.b.claim({key:key(),taskId:s.submitted.taskId}),{code:'TASK_BUSY'});
 });
+
+test('a process window that its restarted driver cannot resume is fenced, its group stopped, and the resource regranted',async t=>{
+  const h=await harness(),groups=[];
+  t.after(async()=>{for(const pid of groups){try{process.kill(-pid,'SIGKILL');}catch{}}await h.close();});
+  const manifest={schema:1,id:'compute-slot',asset:'test:cpu-slot',plugin:'posix-process-group',command:[process.execPath,fixture,'tree'],cwd:h.data,env:{ACCORD_TEST_TRACE:join(h.data,'workload.jsonl')},terminationGraceMs:80};
+  await h.client('admin').registerResource(manifest);
+  const a=h.client('agent-a'),b=h.client('agent-b'),r=await a.reserve('compute-slot',{durationMs:3600000});
+  await eventually(async()=>(await a.reservation(r.id)).state==='running');
+  const run=await a.collaborate('start',{id:r.id,key:'launch'});groups.push(run.pgid);
+  await eventually(()=>groupExists(run.pgid));
+  const next=await b.reserve('compute-slot',{durationMs:60000});
+  const serverPort=Number(new URL(h.url).port),driverPort=Number(new URL(h.driverUrl).port);
+  await stop(h.server,'SIGKILL');await stop(h.driver,'SIGKILL');await delay(h.leaderMs+50);
+  await h.startDriver(driverPort);await h.startServer(serverPort);
+  await eventually(async()=>(await a.reservation(r.id)).state==='failed');
+  assert.equal(groupExists(run.pgid),false);
+  await eventually(async()=>(await b.reservation(next.id)).state==='running');
+});
