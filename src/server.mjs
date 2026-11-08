@@ -24,14 +24,26 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
   requireThat(parsed.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(parsed.hostname) && !parsed.username && !parsed.password,
     'BAD_DRIVER_URL', 'This release supports a loopback HTTP driver only', 400);
   const store = new Store(db, { leaderMs });
-  try { store.takeLeadership(); } catch (e) { store.close(); throw e; }
-  const collaboration=new Collaboration(store,db);
-  const memory=new MemoryPanorama(store,memoryConfig());
-  const managers=new ResourceManagers(store,dirname(db));
-  const awareness=new SessionAwareness(store),overseer=new Overseer(store,awareness,collaboration);
+  let collaboration,memory,managers,awareness,overseer,attention,telemetry;
+  try {
+    // Synchronous mailbox migrations and config reads can outlast a lease. Finish
+    // them before taking leadership; no timer can renew while they block startup.
+    collaboration=new Collaboration(store,db);
+    memory=new MemoryPanorama(store,memoryConfig());
+    managers=new ResourceManagers(store,dirname(db));
+    awareness=new SessionAwareness(store);
+    attention=new Attention(store,collaboration,join(dirname(db),'attention'),{perHour:Number(process.env.ACCORD_WAKE_PER_HOUR||6)});
+    telemetry=createTelemetry({authority:store.authority,hostName,collectors:telemetryCollectors??createCollectors({nativeHelper:sensorPath(dirname(db))})});
+    store.takeLeadership();
+    overseer=new Overseer(store,awareness,collaboration);
+  } catch (error) {
+    attention?.close();
+    try { collaboration?.close(); } finally {
+      try { if(store.leaderToken)store.releaseLeadership(); } finally { store.close(); }
+    }
+    throw error;
+  }
   managers.onRunning=row=>{try{collaboration.granted(overseer.actor,{key:`grant:${row.id}`,reservation:row.id,actor:row.actor,resource:row.resource,queuedAt:row.created_at});}catch{/* A notice is a hint. */}};
-  const attention=new Attention(store,collaboration,join(dirname(db),'attention'),{perHour:Number(process.env.ACCORD_WAKE_PER_HOUR||6)});
-  const telemetry=createTelemetry({authority:store.authority,hostName,collectors:telemetryCollectors??createCollectors({nativeHelper:sensorPath(dirname(db))})});
   const observationRuntime=awarenessRuntime(dirname(db),awareness);
   const secretFor = claim => createHmac('sha256', claimSecret).update(claim.id).digest('base64url');
   const sessionSecret = sessionId => createHmac('sha256', claimSecret).update(`session:${sessionId}`).digest('base64url');
