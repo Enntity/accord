@@ -74,11 +74,14 @@ test('external probes kill a hung child within their deadline',async()=>{
 });
 async function hostFixture(t,name){
   const data=mkdtempSync(join(tmpdir(),'accord-telemetry-'));initialize(data,{fixtures:true});const config=configuration(data);let calls=0;
-  const driver=driverHost(data,config.readToken('driver-control')),driverUrl=await listen(driver.server,0);
-  const service=coordinator({db:join(data,'coordinator.sqlite'),claimSecret:config.readToken('claim-secret'),driverUrl,driverToken:config.readToken('driver-control'),driverInstance:config.driverInstance,hostName:name,
+  let service,closed=false;
+  const close=async()=>{if(service&&!closed){closed=true;await service.close();}};
+  const driver=driverHost(data,config.readToken('driver-control'));
+  t.after(async()=>{await close();driver.server.closeAllConnections();await new Promise(r=>driver.server.close(r));driver.close();rmSync(data,{recursive:true,force:true});});
+  const driverUrl=await listen(driver.server,0);
+  service=coordinator({db:join(data,'coordinator.sqlite'),claimSecret:config.readToken('claim-secret'),driverUrl,driverToken:config.readToken('driver-control'),driverInstance:config.driverInstance,hostName:name,
     telemetryCollectors:{snapshot:async()=>{calls++;await delay(20);return {...sample,fixture:name};},metadata:async()=>({fixture:name,collectors:[]})}});
-  const url=await listen(service.server,0);let closed=false;
-  const close=async()=>{if(!closed){closed=true;await service.close();}};t.after(async()=>{await close();driver.server.closeAllConnections();await new Promise(r=>driver.server.close(r));driver.close();rmSync(data,{recursive:true,force:true});});
+  const url=await listen(service.server,0);
   const counts=()=>Object.fromEntries(['events','commands','actors','participants','claims','reservations'].map(table=>[table,service.store.db.prepare(`SELECT count(*) n FROM ${table}`).get().n]));
   return {data,service,url,config,counts,calls:()=>calls,close,client:new AccordClient(url,config.readToken('agent-a'))};
 }

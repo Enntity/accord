@@ -8,9 +8,58 @@ import { initialize } from '../src/config.mjs';
 import { coordinator } from '../src/server.mjs';
 import { Store } from '../src/store.mjs';
 import { Collaboration } from '../src/collaboration.mjs';
+import { MessengerStore } from '../vendor/messenger/store.js';
 import { withReservation } from '../src/client.mjs';
 import { createHttp, listen, readBody } from '../src/common.mjs';
 import { harness, eventually, delay } from './helpers.mjs';
+
+test('slow mailbox initialization does not consume the coordinator leadership lease',async t=>{
+  const dir=mkdtempSync(join(tmpdir(),'accord-startup-')),db=join(dir,'coordinator.sqlite');
+  initialize(dir,{fixtures:true});
+  let time=1000,migrations=0,service;
+  const takeLeadership=Store.prototype.takeLeadership,transaction=MessengerStore.prototype.transaction;
+  t.mock.method(Store.prototype,'takeLeadership',function(){this.now=()=>time;return takeLeadership.call(this);});
+  t.mock.method(MessengerStore.prototype,'transaction',function(fn){
+    // Simulate synchronous mailbox migrations outlasting the normal five-second lease.
+    time+=6000;migrations++;return transaction.call(this,fn);
+  });
+  t.after(async()=>{if(service)await service.close();rmSync(dir,{recursive:true,force:true});});
+  service=coordinator({db,claimSecret:'fixture',driverUrl:'http://127.0.0.1:1',driverToken:'fixture',driverInstance:'fixture'});
+  assert(migrations>0);service.store.assertLeader();
+  assert.equal(service.store.db.prepare('SELECT until_ms FROM leader').get().until_ms,time+5000);
+  assert.equal(service.store.db.prepare("SELECT count(*) n FROM events WHERE kind='coordinator.started'").get().n,1);
+  // Startup must not weaken the normal expiry fence.
+  time+=5001;assert.throws(()=>service.store.beat(),{code:'LEADER_LOST'});
+});
+
+test('a rejected second coordinator closes its databases and preserves the active leader',async t=>{
+  const dir=mkdtempSync(join(tmpdir(),'accord-contender-')),db=join(dir,'coordinator.sqlite');
+  initialize(dir,{fixtures:true});
+  const options={db,claimSecret:'fixture',driverUrl:'http://127.0.0.1:1',driverToken:'fixture',driverInstance:'fixture'};
+  const service=coordinator(options);
+  t.after(async()=>{await service.close();rmSync(dir,{recursive:true,force:true});});
+  const closeStore=t.mock.method(Store.prototype,'close'),closeMailbox=t.mock.method(MessengerStore.prototype,'close');
+  assert.throws(()=>coordinator(options),{code:'LEADER_ACTIVE'});
+  assert.equal(closeStore.mock.callCount(),1);assert.equal(closeMailbox.mock.callCount(),1);
+  service.store.assertLeader();
+  assert.equal(service.store.db.prepare("SELECT count(*) n FROM events WHERE kind='coordinator.started'").get().n,1);
+});
+
+test('failed overseer initialization closes both databases and relinquishes leadership',t=>{
+  const dir=mkdtempSync(join(tmpdir(),'accord-startup-failed-')),db=join(dir,'coordinator.sqlite');
+  initialize(dir,{fixtures:true});t.after(()=>rmSync(dir,{recursive:true,force:true}));
+  const failure=Error('fixture initialization failure');
+  const mutation=t.mock.method(Store.prototype,'mutate',()=>{throw failure;});
+  const closeStore=t.mock.method(Store.prototype,'close'),closeMailbox=t.mock.method(MessengerStore.prototype,'close');
+  assert.throws(()=>coordinator({db,claimSecret:'fixture',driverUrl:'http://127.0.0.1:1',driverToken:'fixture',driverInstance:'fixture'}),error=>error===failure);
+  assert.equal(closeStore.mock.callCount(),1);assert.equal(closeMailbox.mock.callCount(),1);
+  mutation.mock.restore();
+  const recovered=new Store(db);
+  try {
+    assert.equal(recovered.db.prepare('SELECT until_ms FROM leader').get().until_ms,0);
+    recovered.takeLeadership();recovered.assertLeader();
+  } finally {recovered.releaseLeadership();recovered.close();}
+});
 
 test('SQLITE_FULL stops acknowledgments, reports its cause once, and restart fences the old grant',async t=>{
   const dir=mkdtempSync(join(tmpdir(),'accord-full-')),db=join(dir,'coordinator.sqlite');
