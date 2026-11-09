@@ -103,6 +103,10 @@ finished; use `accord extend --id ID --host AUTHORITY --duration-ms 5400000` if 
 time is needed, keeping the same claim and workload. A reservation can hold a resource
 for up to eight hours by default; a managed resource can declare another limit.
 
+Register one name per physical thing. To retire a name nobody uses any more, run
+`accord resource remove --id NAME` on the host that owns it. It
+refuses while the resource is held or awaited.
+
 A cooperative reservation does not lock files or isolate a GPU. All agents using that
 resource must participate. To have Accord run a workload and confirm it has stopped
 before the next agent starts, see [managed processes](docs/PROCESS-DRIVER.md) and
