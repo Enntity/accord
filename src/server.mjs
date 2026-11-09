@@ -116,6 +116,25 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     }
     overseer.dispatch();
   }catch{/* Keep ownership reconciliation independent of observation failures. */}finally{monitoring=false;}},10000);
+  // A provider that no longer offers a resource says so; the resource leaves once idle.
+  // The coordinator forgets it first, so no new claim can reach a driver being removed.
+  let pruning=false;
+  async function prune(){
+    if(closed||unhealthy||pruning)return;pruning=true;
+    try{
+      const managed=store.db.prepare("SELECT id FROM resource_bindings WHERE plugin='managed-http'").all().map(r=>r.id);
+      const installed=(await request(driverUrl,driverToken,'/control/resources')).resources.filter(r=>r.plugin==='managed-http').map(r=>r.id);
+      for(const id of new Set([...managed,...installed])){
+        if(closed)break;
+        try{
+          const status=await request(driverUrl,driverToken,driverPath('/control/status',id),undefined,2000);
+          if(!status.withdrawn||status.claim_id||(store.binding(id)&&!store.removeResource(id)))continue;
+          await request(driverUrl,driverToken,'/control/resources/withdraw',{id},5000);
+        }catch{/* The next pass retries. */}
+      }
+    }catch{/* The next pass retries. */}finally{pruning=false;}
+  }
+  const pruneStart=setTimeout(prune,1000),pruneTimer=setInterval(prune,600000);
   const mailTimer=setInterval(()=>{if(!closed&&!unhealthy)void collaboration.flush().catch(()=>{});},1000);
   memory.start();
   function describe(actor, claimId) {
@@ -444,10 +463,10 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
   return {
     server, store, reconcile, failed,
     async close() {
-      closed = true; attention.close(); await observationRuntime.close();clearInterval(timer); clearInterval(heartbeat);clearInterval(mailTimer);clearInterval(overseerTimer);memory.close();
+      closed = true; attention.close(); await observationRuntime.close();clearInterval(timer); clearInterval(heartbeat);clearInterval(mailTimer);clearInterval(overseerTimer);clearTimeout(pruneStart);clearInterval(pruneTimer);memory.close();
       server.closeAllConnections();
       await new Promise(resolve => server.close(resolve));
-      while (busy||collaboration.sending||monitoring||managers.busy) await new Promise(resolve => setTimeout(resolve, 10));
+      while (busy||collaboration.sending||monitoring||pruning||managers.busy) await new Promise(resolve => setTimeout(resolve, 10));
       collaboration.close();try { store.releaseLeadership(); } finally { store.close(); }
     }
   };

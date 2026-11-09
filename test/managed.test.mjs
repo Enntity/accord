@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { writeFileSync, mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { harness,eventually,stop,delay } from './helpers.mjs';
-import { createHttp,listen,readBody } from '../src/common.mjs';
+import { createHttp,listen,readBody,requireThat,request } from '../src/common.mjs';
 import { ManagedDriver } from '../src/managed-driver.mjs';
 
 test('managed provider: actual old process stops and restoration succeeds before a second agent receives ownership, including crash recovery', {timeout:30000},async t=>{
@@ -97,4 +97,40 @@ test('a restarted managed driver resumes only a grant its provider had confirmed
   const confirmed=crash('active');assert.equal(confirmed.status().phase,'recovering');
   await assert.rejects(resume(confirmed),e=>e.code!=='REVOKED','a confirmed grant goes back to its provider');
   assert.equal(confirmed.status().phase,'preparing');assert.equal(confirmed.status().epoch,2);confirmed.close();
+});
+
+test('a resource its provider withdraws leaves once idle, and registering it again never reuses a generation',{timeout:30000},async t=>{
+  const h=await harness();t.after(()=>h.close());let offered=true;
+  const provider=createHttp(async(req,res,url)=>{
+    const b=await readBody(req),action=url.pathname.slice(1);
+    if(action==='availability'){requireThat(offered,'resource_unknown','Not offered',404);return {available:true};}
+    return {...b,[action]:true};
+  });
+  const endpoint=await listen(provider);t.after(()=>new Promise(r=>provider.close(r)));
+  const tokenFile=join(h.data,'provider.token');writeFileSync(tokenFile,'provider-test',{mode:0o600});
+  const admin=h.client('admin'),a=h.client('agent-a'),manifest={schema:1,id:'old',asset:'fixture:old',plugin:'managed-http',endpoint,tokenFile};
+  await admin.registerResource(manifest,'register-old');
+  // A provider that cannot be reached says nothing about what it offers.
+  await admin.registerResource({...manifest,id:'offline',asset:'fixture:offline',endpoint:'http://127.0.0.1:9/offline'});
+  const ids=async()=>(await admin.resources()).resources.map(r=>r.localId);
+  const driverIds=async()=>(await request(h.driverUrl,h.credential('driver-control').trim(),'/control/resources')).resources.map(r=>r.id);
+  const restart=async()=>{const port=Number(new URL(h.url).port);await stop(h.server);await h.startServer(port);};
+  const r=await a.reserve('old',{durationMs:600000});
+  const held=await eventually(async()=>{const s=await a.reservation(r.id);return s.state==='running'&&s;});
+  offered=false;await restart();await delay(500);
+  assert((await ids()).includes('old'),'a held resource stays');
+  await eventually(async()=>(await a.reservation(r.id)).state==='running');
+  await a.release(r.id);await eventually(async()=>(await a.reservation(r.id)).state==='released');
+  await restart();
+  await eventually(async()=>!(await ids()).includes('old'));
+  await eventually(async()=>!(await driverIds()).includes('old'));
+  assert(!existsSync(join(h.data,'process-old.sqlite')),'its driver files go too');
+  assert((await ids()).includes('offline'));assert((await driverIds()).includes('offline'));
+  await assert.rejects(a.reserve('old',{durationMs:60000}),{code:'RESOURCE_UNKNOWN'});
+  offered=true;await admin.registerResource(manifest,'register-old');
+  assert((await ids()).includes('old'),'the same registration command works again');
+  const again=await a.reserve('old',{durationMs:60000});
+  const next=await eventually(async()=>{const s=await a.reservation(again.id);return s.state==='running'&&s;});
+  assert(next.generation>held.generation,'fencing continues above every generation the old resource issued');
+  await a.release(again.id);
 });
