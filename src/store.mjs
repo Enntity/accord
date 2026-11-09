@@ -148,11 +148,11 @@ export class Store {
       this.emit('resource.registered',binding);return binding;
     });
   }
-  // Forget a managed resource its provider withdrew, once nothing holds, awaits or depends on it.
+  // Forget a withdrawn or retired resource once nothing holds, awaits or depends on it.
   removeResource(resource){
     return this.mutate(()=>{
       const b=this.binding(resource),busy="SELECT 1 FROM tasks WHERE resource=? AND state IN ('queued','preparing','running','releasing','recovering','cancelling')";
-      if(b?.plugin!=='managed-http'||this.db.prepare("SELECT 1 FROM claims WHERE resource=? AND state!='closed'").get(resource)||this.db.prepare(busy).get(resource)
+      if(!b||this.db.prepare("SELECT 1 FROM claims WHERE resource=? AND state!='closed'").get(resource)||this.db.prepare(busy).get(resource)
         ||this.db.prepare('SELECT 1 FROM tasks t JOIN tasks d ON d.id=t.dependency WHERE d.resource=? AND t.resource!=?').get(resource,resource))return false;
       const {generation}=this.db.prepare('SELECT generation FROM resources WHERE id=?').get(resource);
       this.db.prepare("INSERT INTO meta VALUES('generation_floor',?) ON CONFLICT(key) DO UPDATE SET value=max(CAST(value AS INTEGER),CAST(excluded.value AS INTEGER))").run(String(generation));

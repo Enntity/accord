@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.4
+
+- `accord resource remove --id NAME` retires a resource nobody needs any more, such as a second
+  name for something that already has one. It refuses while anyone holds or waits for the
+  resource, removes its history and driver files like a withdrawal, and keeps fencing safe if the
+  name is registered again. Removing a name that is already gone changes nothing.
+
+Run it on the host that owns the resource, after upgrading that host. A 0.6.3 database upgrades
+in place.
+
 ## 0.6.3
 
 - A `managed-http` resource its provider no longer offers no longer stays forever. The provider
