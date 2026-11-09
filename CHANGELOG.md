@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Upgrading no longer stops with "Existing Codex Accord MCP registration differs" after Codex
+  has re-saved `~/.codex/config.toml` in its own style. The installer now compares the Accord
+  entry's values, not its exact text.
+
 ## 0.6.4
 
 - `accord resource remove --id NAME` retires a resource nobody needs any more, such as a second

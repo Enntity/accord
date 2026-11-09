@@ -184,6 +184,22 @@ test('installer forwards wrapper session identity into Codex MCP and upgrades it
   assert.equal(upgraded.split('[mcp_servers.accord]').length,2);
 });
 
+test('installer accepts a Codex registration that Codex has re-saved in its own style',t=>{
+  const root=temporary(t),data=join(root,'data'),home=join(root,'home');initialize(data);
+  install({home,data});const path=join(home,'.codex','config.toml');
+  // Codex spaces array items and writes integers as floats when it saves the file.
+  const style=text=>text.replace(/^args = .*$/m,line=>line.replaceAll('","','", "')).replace('tool_timeout_sec = 40','tool_timeout_sec = 40.0')+'startup_timeout_sec = 20\n\n[extra_user_setting]\nkeep = true\n';
+  const fresh=readFileSync(path,'utf8'),resaved=style(fresh);writeFileSync(path,resaved);
+  assert(install({home,data}).steps.some(p=>p.path===path&&p.action==='unchanged'));
+  assert.equal(readFileSync(path,'utf8'),resaved);
+  writeFileSync(path,style(fresh.replace(/^env_vars = .*\n/m,'')));install({home,data});
+  const upgraded=readFileSync(path,'utf8');assert.match(upgraded,/env_vars = .*ACCORD_SESSION_FILE/);
+  assert.match(upgraded,/startup_timeout_sec = 20\n\n\[extra_user_setting\]\nkeep = true\n$/);
+  assert.equal(upgraded.split('[mcp_servers.accord]').length,2);
+  writeFileSync(path,resaved.replace('"mcp"','"other"'));
+  assert.throws(()=>install({home,data}),/Codex Accord MCP registration differs/);
+});
+
 test('HTTP bootstrap stays small, keeps old collaborators searchable, and leaves full messages unread',{timeout:10000},async t=>{
   const h=await harness();t.after(()=>h.close());const installed=setup(h);
   const c=await enrollProfile(installed.profile,{label:'Compact join'}),first=await c.bootstrap();
