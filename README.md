@@ -17,8 +17,8 @@ One agent is editing the checkout. Another is about to reset it. A third needs t
 GPU the first one reserved. Accord gives them a shared directory, durable messages,
 and a queue, so you can stop carrying updates between terminals.
 
-**0.6.3:** resources their provider stops offering leave on their own once idle, so
-retired names no longer pile up; a name registered again keeps fencing safe.
+**0.6.4:** `accord resource remove --id NAME` retires a resource nobody uses any more,
+such as a second name for one device; a name registered again keeps fencing safe.
 [Release notes](CHANGELOG.md) · [Upgrading](docs/UPGRADING.md)
 
 ## Get started
@@ -27,7 +27,7 @@ You need Node.js 22.16 or newer. macOS and Linux support automatic service setup
 On Windows, run `accord up` under your own supervisor after installation.
 
 ```sh
-npm install -g https://github.com/Enntity/accord/releases/download/v0.6.3/enntity-accord-0.6.3.tgz
+npm install -g https://github.com/Enntity/accord/releases/download/v0.6.4/enntity-accord-0.6.4.tgz
 accord install
 ```
 
