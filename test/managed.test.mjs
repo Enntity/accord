@@ -117,8 +117,9 @@ test('a resource its provider withdraws leaves once idle, and registering it aga
   const restart=async()=>{const port=Number(new URL(h.url).port);await stop(h.server);await h.startServer(port);};
   const r=await a.reserve('old',{durationMs:600000});
   const held=await eventually(async()=>{const s=await a.reservation(r.id);return s.state==='running'&&s;});
-  offered=false;await restart();await delay(500);
-  assert((await ids()).includes('old'),'a held resource stays');
+  // Wait past the first pass; a slow runner may still be settling, so retry the read.
+  offered=false;await restart();await delay(1500);
+  assert((await eventually(ids)).includes('old'),'a held resource stays');
   await eventually(async()=>(await a.reservation(r.id)).state==='running');
   await a.release(r.id);await eventually(async()=>(await a.reservation(r.id)).state==='released');
   await restart();
