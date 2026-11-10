@@ -23,6 +23,10 @@ export function launch(file, args = []) {
   proc.messages = []; proc.diagnostic = '';
   proc.on('message', message => proc.messages.push(message));
   proc.stderr.on('data', data => { proc.diagnostic = (proc.diagnostic + data.toString()).slice(-4000); });
+  // A test whose service dies otherwise fails only with a refused or reset request.
+  if (['serve','driver'].includes(args[0])) proc.on('exit', (code, signal) => {
+    if (!proc.stopping) process.stderr.write(`[harness] ${args[0]} exited before the test stopped it (code ${code}, signal ${signal}): ${proc.diagnostic.trim().slice(-1500)}\n`);
+  });
   return proc;
 }
 export async function message(proc, type, timeout = 10000) {
@@ -38,6 +42,7 @@ export async function message(proc, type, timeout = 10000) {
 }
 export async function stop(proc, signal = 'SIGTERM') {
   if (!proc || proc.exitCode !== null || proc.signalCode !== null) return;
+  proc.stopping = true;
   await new Promise(resolve => {
     const timer = setTimeout(() => proc.kill('SIGKILL'), 3000);
     proc.once('exit', () => { clearTimeout(timer); resolve(); }); proc.kill(signal);

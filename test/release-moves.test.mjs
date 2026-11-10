@@ -24,11 +24,15 @@ const freePort=()=>new Promise((resolve,reject)=>{const s=createServer().once('e
 const bindable=port=>new Promise(resolve=>{const s=createServer().once('error',()=>resolve(false)).listen(port,'127.0.0.1',()=>s.close(()=>resolve(true)));});
 const exited=proc=>proc.exitCode!==null||proc.signalCode!==null?Promise.resolve():new Promise(resolve=>proc.once('exit',resolve));
 async function supervisor(t){
-  const {home,data}=scratch(t),port=await freePort(),driverPort=await freePort();
-  const up=launch(cliUrl,['up','--home',home,'--data',data,'--port',String(port),'--driver-port',String(driverPort)]);
-  t.after(()=>{if(up.exitCode===null)up.kill('SIGKILL');});
-  await message(up,'ready',20000);
-  return {up,ports:[port,driverPort]};
+  const {home,data}=scratch(t);
+  // A probed free port can be taken again before the service binds it; try fresh ones.
+  for(let attempt=1;;attempt++){
+    const port=await freePort(),driverPort=await freePort();
+    const up=launch(cliUrl,['up','--home',home,'--data',data,'--port',String(port),'--driver-port',String(driverPort)]);
+    t.after(()=>{if(up.exitCode===null)up.kill('SIGKILL');});
+    try{await message(up,'ready',20000);return {up,ports:[port,driverPort]};}
+    catch(error){if(attempt===3||!/EADDRINUSE/.test(error.message))throw error;await exited(up);}
+  }
 }
 
 test('a requested stop exits cleanly after both services have let go of their ports',async t=>{
