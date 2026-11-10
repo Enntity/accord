@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- A coordinator delayed past its leadership lease can continue if no replacement
+  took over. It records the gap and preserves live claims; expired claims and
+  replaced leadership tokens remain fenced.
+- A failed managed-provider restore retries restoration without repeating a
+  confirmed workload stop. A coordinator takeover or driver restart reconfirms
+  the stop, and the resource stays held until restoration succeeds.
+- CI fixtures use the production leadership lease on every platform. Wake tests
+  bind their setup through the admin API instead of the hook's 500 ms deadline.
+
 ## 0.6.5
 
 - Upgrading no longer stops with "Existing Codex Accord MCP registration differs" after Codex

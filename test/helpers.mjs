@@ -48,8 +48,8 @@ export async function stop(proc, signal = 'SIGTERM') {
     proc.once('exit', () => { clearTimeout(timer); resolve(); }); proc.kill(signal);
   });
 }
-// A slow Windows runner can stall past a short lease, and a coordinator that loses it stands down.
-export async function harness({ leaderMs: requested = 1500, dir = null } = {}) {
+// Use the production lease on every runner; expiry tests can ask for a short one.
+export async function harness({ leaderMs: requested = 5000, dir = null } = {}) {
   const leaderMs = process.platform === 'win32' ? Math.max(requested, 5000) : requested;
   const data = dir || mkdtempSync(join(tmpdir(), 'accord-test-'));
   initialize(data,{fixtures:true});
@@ -66,9 +66,9 @@ export async function harness({ leaderMs: requested = 1500, dir = null } = {}) {
       const proc = launch(new URL('../src/cli.mjs', import.meta.url), ['serve','--data',data,'--port',String(port),'--driver-url',driverUrl,'--leader-ms',String(leaderMs)]);
       processes.push(proc); const ready = await message(proc, 'ready'); h.server = proc; h.url = ready.url; return proc;
     };
-    // A stalled Windows runner can outlast the lease during startup; a second start recovers it.
+    // Startup can race a previous process's lease on any runner.
     return start().catch(async error => {
-      if (process.platform !== 'win32' || !/LEADER_/.test(error.message)) throw error;
+      if (!/LEADER_/.test(error.message)) throw error;
       await delay(leaderMs + 250); return start();
     });
   };
