@@ -1,10 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.6.5
 
 - Upgrading no longer stops with "Existing Codex Accord MCP registration differs" after Codex
   has re-saved `~/.codex/config.toml` in its own style. The installer now compares the Accord
   entry's values, not its exact text.
+
+No schema change: a 0.6.4 database upgrades in place.
 
 ## 0.6.4
 
