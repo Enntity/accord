@@ -18,6 +18,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
+      # The OS drive of a Windows runner can stall a synchronous SQLite commit for
+      # seconds, long enough to lapse a coordinator's leadership lease mid-test.
+      - name: Keep test data on the runner's work drive
+        if: runner.os == 'Windows'
+        shell: bash
+        run: printf 'TEMP=%s\nTMP=%s\n' "$RUNNER_TEMP" "$RUNNER_TEMP" >> "$GITHUB_ENV"
       - run: npm run verify
       - name: Install and use the packed release
         if: runner.os != 'Windows'
