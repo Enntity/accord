@@ -9,6 +9,47 @@ import { harness,eventually,stop,delay } from './helpers.mjs';
 import { createHttp,listen,readBody,requireThat,request } from '../src/common.mjs';
 import { ManagedDriver } from '../src/managed-driver.mjs';
 
+test('restoration retries keep the confirmed stop, but takeover and restart reconfirm it',async t=>{
+  const dir=mkdtempSync(join(tmpdir(),'accord-restore-')),file=join(dir,'driver.sqlite'),tokenFile=join(dir,'provider.token');
+  writeFileSync(tokenFile,'fixture');
+  const manifest={schema:1,id:'pair',asset:'fixture:pair',plugin:'managed-http',endpoint:'http://127.0.0.1:9',tokenFile};
+  let driver=new ManagedDriver(file,manifest),blockStop=true,blockRestore=true;
+  t.after(()=>{driver.close();rmSync(dir,{recursive:true,force:true});});
+  const calls=[],provider=async(action,body)=>{
+    calls.push(action);
+    if(action==='stop'&&blockStop)throw Error('Stop unconfirmed');
+    if(action==='restore'&&blockRestore)throw Error('Restore health failed');
+    return {...body,[action]:true};
+  };
+  driver.call=provider;
+  const grant={instance:driver.status().instance,authority:'host',epoch:1,generation:1,claimId:'claim',credentialHash:'a'.repeat(64)};
+  await driver.activate(grant);
+  await assert.rejects(driver.revoke(grant),/Stop unconfirmed/);
+  assert.equal(driver.status().phase,'stopping');assert.equal(calls.includes('restore'),false);
+  blockStop=false;
+  for(let n=0;n<3;n++)await assert.rejects(driver.revoke(grant),/Restore health failed/);
+  assert.equal(calls.filter(x=>x==='stop').length,2,'only an unconfirmed stop is retried');
+  assert.equal(driver.status().phase,'restoring');assert.equal(driver.status().claim_id,grant.claimId);
+  await assert.rejects(driver.activate(grant),{code:'REVOKED'});
+  await assert.rejects(driver.activate({...grant,generation:2,claimId:'next'}),{code:'DRIVER_BUSY'});
+  await assert.rejects(driver.start('fixture',{key:'late'}),{code:'STALE_GRANT'});
+  const takeover={...grant,epoch:2};
+  await assert.rejects(driver.revoke(takeover),/Restore health failed/);
+  assert.equal(calls.filter(x=>x==='stop').length,3,'a new epoch reconfirms the stop');
+  driver.close();driver=new ManagedDriver(file,manifest);driver.call=provider;
+  assert.equal(driver.status().phase,'interrupted');
+  await assert.rejects(driver.activate(takeover),{code:'REVOKED'});
+  await assert.rejects(driver.revoke(takeover),/Restore health failed/);
+  assert.equal(calls.filter(x=>x==='stop').length,4,'a driver restart reconfirms the stop');
+  blockRestore=false;assert.equal((await driver.revoke(takeover)).released,true);
+  assert.equal(calls.filter(x=>x==='stop').length,4);
+  assert.equal(driver.status().phase,'idle');assert.equal(driver.status().claim_id,null);
+  const audit=driver.db.prepare('SELECT kind FROM audit ORDER BY seq').all().map(x=>x.kind);
+  assert.equal(audit.filter(x=>x==='workload.stopped').length,3);
+  assert(audit.indexOf('provider.restored')<audit.indexOf('grant.revoked'));
+  const count=calls.length;await driver.revoke(takeover);assert.equal(calls.length,count,'release receipts remain idempotent');
+});
+
 test('managed provider: actual old process stops and restoration succeeds before a second agent receives ownership, including crash recovery', {timeout:30000},async t=>{
   const h=await harness();t.after(()=>h.close());
   let child=null,blockStop=false,blockRestore=false,starts=0;const log=[];

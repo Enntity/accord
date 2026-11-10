@@ -28,8 +28,8 @@ test('slow mailbox initialization does not consume the coordinator leadership le
   assert(migrations>0);service.store.assertLeader();
   assert.equal(service.store.db.prepare('SELECT until_ms FROM leader').get().until_ms,time+5000);
   assert.equal(service.store.db.prepare("SELECT count(*) n FROM events WHERE kind='coordinator.started'").get().n,1);
-  // Startup must not weaken the normal expiry fence.
-  time+=5001;assert.throws(()=>service.store.beat(),{code:'LEADER_LOST'});
+  // A later stall can renew only while the same coordinator still owns the row.
+  time+=5001;service.store.beat();service.store.assertLeader();
 });
 
 test('a rejected second coordinator closes its databases and preserves the active leader',async t=>{
@@ -106,15 +106,32 @@ test('supervised heartbeat renews through slow preparation and releases the same
   assert.equal(claims.length,1);assert.equal(claims[0].outcome,'released');
 });
 
-test('serve exits nonzero on lost leadership so the installed supervisor can restart it', {skip:process.platform==='win32'},async t=>{
+test('serve exits nonzero after a leadership takeover so the installed supervisor can restart it', {skip:process.platform==='win32'},async t=>{
   const h=await harness({leaderMs:1000});t.after(()=>h.close());
   const old=h.server,client=h.client('agent-a'),r=await client.reserve('artifact',{leaseMs:30000});
   const running=await eventually(async()=>{const s=await client.reservation(r.id);return s.state==='running'&&s;});
-  old.kill('SIGSTOP');await delay(1400);old.kill('SIGCONT');
+  t.after(()=>old.kill('SIGCONT'));
+  old.kill('SIGSTOP');await delay(1400);
+  const replacement=new Store(join(h.data,'coordinator.sqlite'));
+  try { replacement.takeLeadership();replacement.releaseLeadership(); } finally { replacement.close(); }
+  old.kill('SIGCONT');
   await eventually(()=>old.exitCode!==null);
   assert.equal(old.exitCode,1);assert.match(old.diagnostic,/coordinator.failed/);assert.match(old.diagnostic,/LEADER_LOST/);
   await h.startServer();
   await eventually(async()=>{const s=await h.client('agent-a').reservation(r.id);return s.state==='failed';});
   const claims=(await h.client('admin').board()).claims;
   assert.equal(claims.find(c=>c.id===running.claimId).state,'closed');
+});
+
+test('serve resumes after a stall without losing a live grant or its generation', {skip:process.platform==='win32'},async t=>{
+  const h=await harness({leaderMs:1000});t.after(()=>h.close());
+  const old=h.server,client=h.client('agent-a'),r=await client.reserve('artifact',{leaseMs:30000});
+  const running=await eventually(async()=>{const s=await client.reservation(r.id);return s.state==='running'&&s;});
+  t.after(()=>old.kill('SIGCONT'));
+  old.kill('SIGSTOP');await delay(1400);old.kill('SIGCONT');
+  const resumed=await eventually(async()=>{const s=await client.reservation(r.id);return s.state==='running'&&s;});
+  assert.equal(old.exitCode,null);assert.equal(resumed.claimId,running.claimId);assert.equal(resumed.generation,running.generation);
+  const db=new Store(join(h.data,'coordinator.sqlite'));
+  try { assert(db.db.prepare("SELECT count(*) n FROM events WHERE kind='coordinator.lease_recovered'").get().n>=1); }
+  finally { db.close(); }
 });

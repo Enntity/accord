@@ -48,9 +48,33 @@ test('leadership takeover revokes unfinished work and fences the old coordinator
   one.checkpoint(actor,claimId,{key:'checkpoint',note:'durable next step'});
   now=2100;two.takeLeadership();
   assert.throws(()=>one.beat(),e=>e.code==='LEADER_LOST');
+  assert.throws(()=>one.steer({id:'admin',role:'admin'},{key:'stale',paused:true}),{code:'LEADER_LOST'});
+  assert.throws(()=>one.assertLeader(),{code:'LEADER_LOST'});
   assert.equal(two.claim(claimId).state,'revoking');assert.equal(two.task(taskId).checkpoint,'durable next step');
   assert.throws(()=>two.acquire(actor,{key:'new',taskId}),e=>e.code==='TASK_BUSY');
   two.released(claimId);const next=two.acquire(actor,{key:'new',taskId});assert.equal(two.claim(next.claimId).generation,2);
+});
+test('a stalled leader recovers its own token without reviving expired claims',t=>{
+  const file=join(temporary(t),'stalled.sqlite');let now=1000;
+  const store=new Store(file,{now:()=>now,leaderMs:1000});t.after(()=>store.close());
+  store.provision('a','secret','worker');store.takeLeadership();
+  const actor={id:'a',role:'worker'},epoch=store.epoch,leaderToken=store.leaderToken;
+  const {taskId}=store.submit(actor,{key:'task',title:'job',input:'a',expectedHash:hash('A')});
+  const {claimId}=store.acquire(actor,{key:'claim',taskId,leaseMs:5000});store.activated(claimId);
+  now=2500;store.beat();
+  assert.equal(store.epoch,epoch);assert.equal(store.leaderToken,leaderToken);
+  assert.equal(store.claim(claimId).state,'running');assert.equal(store.claim(claimId).generation,1);
+  assert.deepEqual(JSON.parse(store.db.prepare("SELECT data FROM events WHERE kind='coordinator.lease_recovered'").get().data),{epoch,expiredAt:2000,resumedAt:2500,gapMs:500});
+  // Reconciliation can run before the heartbeat after a stall.
+  now=4000;store.sweep();assert.equal(store.claim(claimId).state,'running');
+  // A read can also arrive first. It must reacquire the write lock to renew.
+  now=5500;store.assertLeader();
+  now=7000;assert.throws(()=>store.renew(actor,claimId,{key:'late',leaseMs:5000}),{code:'STALE_CLAIM'});
+  store.sweep();assert.equal(store.claim(claimId).state,'revoking');
+  assert.equal(store.db.prepare("SELECT count(*) n FROM events WHERE kind='coordinator.started'").get().n,1);
+  store.releaseLeadership();
+  assert.throws(()=>store.beat(),{code:'LEADER_LOST'});
+  assert.throws(()=>store.assertLeader(),{code:'LEADER_LOST'});
 });
 test('expiry retains the exclusive hold until a release receipt is processed; commands deduplicate',t=>{
   let now=0;const store=new Store(join(temporary(t),'store.sqlite'),{now:()=>now,leaderMs:10000});t.after(()=>store.close());

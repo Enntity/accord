@@ -22,7 +22,9 @@ async function fixture(t) {
   await b.announce({label:'Peer',activity:'working'});
   const session='native-one',external=session;
   const hook=(input={})=>contextHook({profilePath:profile,source:'claude',input:{session_id:session,hook_event_name:'PostToolUse',...input}});
-  await hook({tool_name:'mcp__accord__accord_bootstrap',tool_response:{address}});
+  // Bind fixture state through the admin API. Unrelated wake tests must not
+  // inherit the native hook's intentionally short 500 ms response budget.
+  await admin.collaborate('context-inbox',{source:'claude',externalId:external,actor:address.split('/')[1]});
   const ops=(operation,args)=>admin.collaborate(operation,{source:'claude',externalId:external,...args});
   const wait=(args={})=>admin.collaborate('context-wait',{source:'claude',externalId:external,waiter:'w1',waitMs:2000,...args});
   const send=(text,kind='message')=>b.send(address,text,{kind});
