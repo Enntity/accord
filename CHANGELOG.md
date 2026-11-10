@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.6
 
 - A coordinator delayed past its leadership lease can continue if no replacement
   took over. It records the gap and preserves live claims; expired claims and
