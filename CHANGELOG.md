@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.7
 
 - A session that has sent no heartbeat for 36 hours, the same window observers use for
   transcripts, now shows as exited. Before, it stayed "working" on the board and the overseer
