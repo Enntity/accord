@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { hash } from '../src/common.mjs';
 import { Store } from "../src/store.mjs";
-import { SessionAwareness, redact } from "../src/session-awareness.mjs";
+import { SessionAwareness, redact, staleSessionMs } from "../src/session-awareness.mjs";
 import { Collaboration } from "../src/collaboration.mjs";
 import { Overseer } from "../src/overseer.mjs";
 let serial = 0;
@@ -376,6 +376,22 @@ test('announcements preserve completion and wait state; explicit work resumes', 
     assert.equal(value.state,state);
   }
   assert.equal(f.v.announce(f.a,{key:'resume',label:'Worker',activity:'New task',state:'working'}).state,'working');
+});
+
+test('a session silent past the observer lookback leaves the board, and its next heartbeat returns it idle', t => {
+  const f=fixture(t);
+  f.o.configure(f.admin,{key:'quiet-rule',id:'quiet',kind:'quiet-session',quietMs:60000});
+  f.report(f.a,{state:'working'});f.report(f.b,{state:'done'});
+  f.advance(staleSessionMs-1000);f.v.expireStale();
+  assert.equal(f.v.row('a').state,'working','still inside the lookback');
+  f.advance(2000);f.v.expireStale();
+  assert.equal(f.v.row('a').state,'exited');assert.equal(f.v.row('b').state,'done');
+  f.o.quiet();
+  assert.equal(f.s.db.prepare("SELECT count(*) n FROM overseer_incidents WHERE state='open'").get().n,0);
+  const exited=f.v.row('a').revision;
+  f.v.heartbeat(f.a);assert.equal(f.v.row('a').state,'idle');assert.equal(f.v.row('a').revision,exited+1);
+  f.v.heartbeat(f.a);assert.equal(f.v.row('a').revision,exited+1,'later heartbeats are not news');
+  f.report(f.b,{state:'exited'});f.v.heartbeat(f.b);assert.equal(f.v.row('b').state,'exited','a live session that said exited stays exited');
 });
 
 test('native binding resolves existing duplicate incidents and preserves stable incident timestamps',t=>{
