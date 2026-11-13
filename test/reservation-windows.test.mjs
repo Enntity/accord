@@ -185,13 +185,16 @@ test('preparing reservation renewal preserves identity and cannot revive expiry 
 test('a cooperative window survives a crash of the whole host under the same claim',{timeout:30000},async t=>{
   const h=await harness();t.after(()=>h.close());
   await h.client('admin').registerResource({schema:1,id:'canary',asset:'fixture:canary',plugin:'cooperative'});
-  const a=h.client('agent-a'),r=await a.reserve('canary',{durationMs:3600000});
+  const a=h.client('agent-a');await a.announce({label:'holder',activity:'testing'});
+  const r=await a.reserve('canary',{durationMs:3600000});
   const before=await eventually(async()=>{const s=await a.reservation(r.id);return s.state==='running'&&s;});
   const serverPort=Number(new URL(h.url).port),driverPort=Number(new URL(h.driverUrl).port);
   await stop(h.server,'SIGKILL');await stop(h.driver,'SIGKILL');await delay(h.leaderMs+50);
   await h.startDriver(driverPort);await h.startServer(serverPort);
   const after=await eventually(async()=>{const s=await a.reservation(r.id);return s.state==='running'&&s;});
   assert.equal(after.claimId,before.claimId);assert.equal(after.generation,before.generation);assert.equal(after.deadline,before.deadline);
+  // The holder already has this window; resuming it is not news.
+  await delay(500);assert(!(await a.inbox()).messages.some(m=>m.text.includes(r.id)));
   await a.release(r.id);await eventually(async()=>(await a.reservation(r.id)).state==='released');
 });
 
@@ -201,7 +204,7 @@ test('a holder that did not release is told when its window ends, and a released
   const a=h.client('agent-a');await a.announce({label:'holder',activity:'testing'});
   const kept=await a.reserve('canary',{durationMs:1500});
   const notice=await eventually(async()=>(await a.inbox()).messages.find(m=>m.text.includes(kept.id)));
-  assert.match(notice.text,/ended as failed: its deadline passed/);
+  assert.match(notice.text,/reached its deadline and ended\./);assert.doesNotMatch(notice.text,/failed/);
   const released=await a.reserve('canary',{durationMs:60000});
   await eventually(async()=>(await a.reservation(released.id)).state==='running');
   await a.release(released.id);await eventually(async()=>(await a.reservation(released.id)).state==='released');
