@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.8
 
 - Discovery compaction counts serialized bytes incrementally and groups pools once.
   Local resources now appear in `find`, alongside linked resources.
