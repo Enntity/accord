@@ -88,6 +88,7 @@ test('generic cooperative resources require only a name and asset; enforcement s
   const h=await harness();t.after(()=>h.close());const a=h.client('agent-a');
   await h.client('admin').registerResource({schema:1,id:'repo',asset:'repo:example',plugin:'cooperative'});
   assert((await a.resources()).resources.find(r=>r.localId==='repo').enforcement.includes('no external process'));
+  assert((await a.find('repo')).resources.some(r=>r.id.endsWith('/repo')),'local resources must be discoverable');
   const r=await a.reserve('repo',{purpose:'editing'});await eventually(async()=>(await a.reservation(r.id)).state==='running');
   await assert.rejects(a.collaborate('start',{id:r.id,key:'no-process'}),{code:'WRONG_DRIVER'});
   await a.release(r.id);await eventually(async()=>(await a.reservation(r.id)).state==='released');

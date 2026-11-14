@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { querySchema } from '../src/query-schema.mjs';
 import { Store } from '../src/store.mjs';
 import { Collaboration } from '../src/collaboration.mjs';
 import { AccordClient } from '../src/client.mjs';
@@ -20,7 +21,8 @@ test('v15 upgrade preserves an existing heartbeat deadline, generation and comma
   const before=c.reservation(actor,r.id),commands=old.db.prepare('SELECT * FROM commands').all();
   c.close();old.close();
   const v15=new DatabaseSync(file);
-  v15.exec('ALTER TABLE reservations DROP COLUMN duration_ms; DELETE FROM migrations WHERE version=16');
+  for(const [,name] of querySchema.matchAll(/CREATE INDEX (\w+)/g))v15.exec(`DROP INDEX ${name}`);
+  v15.exec('ALTER TABLE reservations DROP COLUMN duration_ms; DELETE FROM migrations WHERE version>=16');
   const checksums=v15.prepare('SELECT * FROM migrations').all();v15.close();
   const upgraded=new Store(file,{now:()=>0});
   t.after(()=>{upgraded.close();rmSync(dir,{recursive:true,force:true});});
@@ -128,10 +130,10 @@ test('a coordinator restart resumes an unexpired window under the same claim, an
 
 test('new clients refuse window requests on old hosts before mutating, while explicit heartbeat clients remain compatible',async()=>{
   const c=new AccordClient('http://127.0.0.1:1','fixture'),calls=[];
-  c.collaborate=async(op,args,host)=>{calls.push({op,args,host});return op==='resources'?{resources:[]}:{id:'r'};};
+  c.collaborate=async(op,args,host)=>{calls.push({op,args,host});if(op==='capabilities')throw Object.assign(Error('old host'),{code:'UNKNOWN_OPERATION'});return op==='resources'?{resources:[]}:{id:'r'};};
   await assert.rejects(c.reserve('remote/pair'),{code:'WINDOW_UNSUPPORTED'});
   await assert.rejects(c.extend('r',{host:'remote',durationMs:90*minute}),{code:'WINDOW_UNSUPPORTED'});
-  assert(calls.every(x=>x.op==='resources'&&x.host==='remote'));
+  assert(calls.every(x=>['capabilities','resources'].includes(x.op)&&x.host==='remote'));assert.deepEqual(calls.map(x=>x.op),['capabilities','resources','capabilities','resources']);
   await c.reserve('remote/pair',{leaseMs:minute});assert.equal(calls.at(-1).op,'reserve');
   await c.extend('r',{leaseMs:minute});assert.equal(calls.at(-1).op,'renew');
   const count=calls.length;

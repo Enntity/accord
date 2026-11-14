@@ -55,6 +55,19 @@ On linked hosts, verify `accord find`, send and acknowledge a test message, and 
 reserve, extend and release on a dedicated cooperative resource. Check that extension
 keeps the claim and generation. Do not use an active GPU workload as a smoke test.
 
+## Unreleased optimization changes
+
+Migration 17 adds indexes without changing existing migration checksums or stored
+records. The old 0.6.7 binary does not understand migration 17 and will refuse that
+database; keep the normal upgrade/recovery precautions above. Never delete the
+migration record or restore older fencing history just to make a downgrade start.
+
+MCP reads use smaller pages and explicit detail requests. Update the coordinator
+and MCP bridge together for the new inbox and history paging contracts. Legacy
+HTTP defaults still return their previous full records. See [API](API.md#bounded-reads)
+and [performance measurements](PERFORMANCE.md). These changes are merged source,
+not a published package or a fleet deployment.
+
 ## Changes from 0.6.6
 
 The prune pass that runs every ten minutes marks a session `exited` once it has sent no

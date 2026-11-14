@@ -475,8 +475,9 @@ export class SessionAwareness {
           .all(limit);
     return { sessions: rows.map((r) => this.public(r)) };
   }
-  read(session, { after = 0, limit = 60 } = {}) {
+  read(session, { after = 0, before, limit = 60 } = {}) {
     integer(after, "after", 0, Number.MAX_SAFE_INTEGER);
+    if(before!==undefined)integer(before,"before",1,Number.MAX_SAFE_INTEGER);
     integer(limit, "limit", 1, 200);
     const row = this.row(session);
     requireThat(!row.hidden,'NOT_FOUND','Session is internal to its harness',404);
@@ -486,7 +487,9 @@ export class SessionAwareness {
       "Session content is private",
       403,
     );
-    const events = after
+    const events = before!==undefined
+      ? this.db.prepare('SELECT seq,at,kind,body FROM session_activity WHERE session_id=? AND seq<? ORDER BY seq DESC LIMIT ?').all(session,before,limit).reverse()
+      : after
       ? this.db
           .prepare(
             "SELECT seq,at,kind,body FROM session_activity WHERE session_id=? AND seq>? ORDER BY seq LIMIT ?",
@@ -502,6 +505,7 @@ export class SessionAwareness {
       session: this.public(row),
       events,
       cursor: events.at(-1)?.seq ?? after,
+      ...(events.length&&this.db.prepare('SELECT 1 FROM session_activity WHERE session_id=? AND seq<? LIMIT 1').get(session,events[0].seq)?{previous:events[0].seq}:{}),
     };
   }
   summarize(session, revision, summary, details = {}) {
