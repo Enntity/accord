@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+import { querySchema } from './query-schema.mjs';
 import { messageAttentionSchema } from './message-attention.mjs';
 import { managerSchema } from './resource-managers.mjs';
 import { awarenessSchema } from './session-awareness.mjs';
@@ -59,7 +60,7 @@ export class Store {
       // NULL declares nothing, so the reservation default applies.
       "ALTER TABLE resource_bindings ADD COLUMN max_ownership_ms INTEGER;ALTER TABLE resource_bindings ADD COLUMN allow_indefinite INTEGER NOT NULL DEFAULT 0;",
       // Migration 16: a finite window is owned by the daemon, not a chat heartbeat.
-      "ALTER TABLE reservations ADD COLUMN duration_ms INTEGER;"]); this.now = now; this.leaderMs = leaderMs;
+      "ALTER TABLE reservations ADD COLUMN duration_ms INTEGER;",querySchema]); this.now = now; this.leaderMs = leaderMs;
     transaction(this.db, () => {
       this.db.prepare("INSERT OR IGNORE INTO meta VALUES('authority',?)").run(id());
       this.db.prepare("INSERT OR IGNORE INTO meta VALUES('paused','false')").run();
@@ -222,7 +223,7 @@ export class Store {
   releaseLeadership() {
     this.db.prepare('UPDATE leader SET until_ms=0 WHERE token=?').run(this.leaderToken);
   }
-  emit(kind, data) { this.db.prepare('INSERT INTO events(at,kind,data) VALUES(?,?,?)').run(this.now(), kind, JSON.stringify(data)); }
+  emit(kind, data) { this.db.prepare('INSERT INTO events(at,kind,data) VALUES(?,?,?)').run(this.now(), kind, JSON.stringify(data)); this.onEvent?.(); }
   command(actor, body, operation, fn) {
     text(body.key, 'key', 128);
     const fingerprint = hash(JSON.stringify({ operation, body }));
@@ -376,6 +377,12 @@ export class Store {
       }
     });
   }
+  nextDeadline(){
+    const session=this.db.prepare('SELECT min(expires_at) at FROM sessions WHERE closed_at IS NULL').get().at;
+    const claim=this.db.prepare("SELECT min(deadline) at FROM claims WHERE state IN ('preparing','running')").get().at;
+    const queue=this.db.prepare("SELECT min(r.queued_until) at FROM tasks t JOIN reservations r ON r.task_id=t.id WHERE t.state='queued'").get().at;
+    return Math.min(session??Infinity,claim??Infinity,queue??Infinity);
+  }
   pending() { return this.db.prepare("SELECT * FROM claims WHERE state IN ('preparing','releasing','revoking') ORDER BY created_at").all(); }
   activated(claimId) {
     this.mutate(() => {
@@ -412,16 +419,34 @@ export class Store {
       this.emit('driver.unavailable', { claim: claimId, reason: code });
     });
   }
-  board(after = 0) {
+  board(after = 0, {active=false,limit,before}={}) {
     this.assertLeader();
-    const tasks = this.db.prepare('SELECT * FROM tasks ORDER BY created_at,rowid').all();
-    const claims = this.db.prepare('SELECT * FROM claims ORDER BY created_at,rowid').all();
-    const events = this.db.prepare('SELECT * FROM events WHERE seq>? ORDER BY seq LIMIT 500').all(after).map(e => ({ ...e, data: JSON.parse(e.data) }));
-    const holders = claims.filter(c => c.state !== 'closed');
-    for (const task of tasks) task.blockedBy = task.dependency && this.task(task.dependency).state !== 'succeeded' ? 'dependency' : task.state === 'queued' && holders.some(c=>c.resource===task.resource) ? 'resource held' : null;
-    return { authority: this.authority, epoch: this.epoch, observedAt: this.now(), paused: this.db.prepare("SELECT value FROM meta WHERE key='paused'").get().value === 'true',
-      tasks, claims, sessions:this.db.prepare('SELECT * FROM sessions ORDER BY created_at').all(), resource: { id: 'artifact', capacity: 1, enforcement: 'enforced-at-artifact-API', holders: holders.filter(c=>c.resource==='artifact').map(c => c.id) },
-      resources:this.db.prepare('SELECT r.id,b.plugin,b.asset,b.enforcement FROM resources r LEFT JOIN resource_bindings b ON b.id=r.id ORDER BY r.id').all().map(r=>({...r,capacity:1,holders:holders.filter(c=>c.resource===r.id).map(c=>c.id)})), events,
-      cursor: events.at(-1)?.seq ?? after, hasMore: events.length === 500 };
+    if(limit!==undefined)integer(limit,'limit',1,100);
+    if(before!==undefined)integer(before,'before',1,Number.MAX_SAFE_INTEGER);
+    const conditions=[];if(active)conditions.push("state IN ('queued','preparing','running','recovering','releasing','cancelling')");
+    if(before!==undefined)conditions.push('rowid<?');
+    const paged=limit!==undefined;
+    const rows=this.db.prepare(`SELECT ${paged?'rowid boardRow,*':'*'} FROM tasks ${conditions.length?'WHERE '+conditions.join(' AND '):''} ORDER BY ${paged?'rowid DESC':'created_at,rowid'} ${paged?'LIMIT ?':''}`)
+      .all(...(before!==undefined?[before]:[]),...(paged?[limit+1]:[]));
+    const moreTasks=paged&&rows.length>limit;if(moreTasks)rows.pop();
+    const nextBefore=moreTasks?rows.at(-1).boardRow:undefined;
+    const tasks=paged?rows.reverse().map(({boardRow,...task})=>task):rows;
+    const holders=this.db.prepare("SELECT * FROM claims WHERE state!='closed'").all();
+    const claims=active?holders:paged?this.db.prepare(`SELECT * FROM claims WHERE task_id IN (${tasks.map(()=>'?').join(',')}) ORDER BY created_at,rowid`).all(...tasks.map(t=>t.id))
+      :this.db.prepare('SELECT * FROM claims ORDER BY created_at,rowid').all();
+    const events=this.db.prepare('SELECT * FROM events WHERE seq>? ORDER BY seq LIMIT 500').all(after).map(e=>({...e,data:JSON.parse(e.data)}));
+    const held=new Map();for(const c of holders){if(!held.has(c.resource))held.set(c.resource,[]);held.get(c.resource).push(c.id);}
+    const states=new Map(tasks.some(t=>t.dependency)?tasks.map(t=>[t.id,t.state]):[]);
+    for(const task of tasks){
+      if(task.dependency&&!states.has(task.dependency))states.set(task.dependency,this.task(task.dependency).state);
+      task.blockedBy=task.dependency&&states.get(task.dependency)!=='succeeded'?'dependency':task.state==='queued'&&held.has(task.resource)?'resource held':null;
+    }
+    const actors=active||paged?[...new Set(claims.map(c=>c.actor))]:[];
+    const sessions=active||paged?this.db.prepare(`SELECT * FROM sessions WHERE id IN (${actors.map(()=>'?').join(',')}) ORDER BY created_at`).all(...actors)
+      :this.db.prepare('SELECT * FROM sessions ORDER BY created_at').all();
+    return {authority:this.authority,epoch:this.epoch,observedAt:this.now(),paused:this.db.prepare("SELECT value FROM meta WHERE key='paused'").get().value==='true',
+      tasks,claims,sessions,resource:{id:'artifact',capacity:1,enforcement:'enforced-at-artifact-API',holders:held.get('artifact')??[]},
+      resources:this.db.prepare('SELECT r.id,b.plugin,b.asset,b.enforcement FROM resources r LEFT JOIN resource_bindings b ON b.id=r.id ORDER BY r.id').all().map(r=>({...r,capacity:1,holders:held.get(r.id)??[]})),events,
+      cursor:events.at(-1)?.seq??after,hasMore:events.length===500,...(paged?{moreTasks,...(moreTasks?{nextBefore}:{})}:{}),...(active?{active:true}:{})};
   }
 }

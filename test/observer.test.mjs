@@ -170,3 +170,19 @@ test('subagent identity is distinct and carries explicit native parent metadata'
  const a=parseTranscript('claude',[JSON.stringify({type:'assistant',sessionId:'parent',isSidechain:true,message:{content:[{type:'text',text:'Child result'}],stop_reason:'end_turn'}})],{externalId:'agent-one'});
  assert.equal(a.externalId,'parent/agent-one');assert.deepEqual(a.parentSession,{source:'claude',externalId:'parent'});assert.equal(a.state,'done');
 });
+
+
+test('contiguous transcript windows preserve a JSON record crossing the head boundary',async t=>{
+  const {mkdtempSync,writeFileSync,rmSync}=await import('node:fs'),{tmpdir}=await import('node:os'),{join}=await import('node:path');
+  const {Store}=await import('../src/store.mjs'),{SessionAwareness}=await import('../src/session-awareness.mjs'),{TranscriptObserver}=await import('../src/observers.mjs');
+  const dir=mkdtempSync(join(tmpdir(),'accord-transcript-boundary-')),store=new Store(join(dir,'store.sqlite'));store.takeLeadership();
+  t.after(()=>{store.close();rmSync(dir,{recursive:true,force:true});});
+  const awareness=new SessionAwareness(store),meta=JSON.stringify({type:'session_meta',payload:{id:'boundary'}})+'\n';
+  const padding=JSON.stringify({ignored:'x'.repeat(65400-meta.length)})+'\n';
+  const body='Preserve this complete boundary event '+ '界'.repeat(300);
+  const event=JSON.stringify({type:'event_msg',payload:{type:'user_message',message:body}})+'\n';
+  assert(meta.length+padding.length<65536);assert(Buffer.byteLength(meta+padding+event)>65536);
+  writeFileSync(join(dir,'boundary.jsonl'),meta+padding+event);
+  assert.deepEqual(await new TranscriptObserver({awareness,roots:[{source:'codex',path:dir}]}).scan(),{imported:1,failed:0});
+  const view=awareness.read(awareness.list().sessions[0].id);assert.equal(view.events.length,1);assert.equal(view.events[0].body,body);
+});

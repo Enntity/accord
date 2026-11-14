@@ -728,7 +728,7 @@
     updateChrome();
     const requests = [
       ["awareness", () => api("/v1/awareness")],
-      ["board", () => api(`/v1/board?after=${S.cursor}`)],
+      ["board", () => api(`/v1/board?active=true&after=${S.cursor}`)],
       ["directory", () => operation("find")],
       ["resources", () => operation("resources")],
       ["inbox", () => operation("inbox")],

@@ -40,6 +40,8 @@ work that needs no shared resource. Then:
   hosts. Check before work that could collide with another agent.
 - `accord_sessions` / `accord_session_read`: search summaries and recent redacted
   activity across linked hosts, then read a session with its host authority.
+  Use `detail:true` for full search metadata. Session reads return 10 events by
+  default; pass `previous` as `before` for older events, or increase `limit`.
 - `accord_report`: report meaningful progress, `waiting` with `expectedAt`, or
   `done` when finished. Heartbeat is presence, not progress. Use `private` for
   content that should not be shared.
@@ -62,10 +64,12 @@ work that needs no shared resource. Then:
 - `accord_inbox`: `waitMs: 20000` waits for incoming messages, but ending your turn is
   cheaper when you only need to wait: mail and queued grants wake you. After handling each
   message call `accord_read` with its `deliveryId`; otherwise it stays pending.
+  Pass the returned `cursor` to read the next page; bodies are never truncated.
 - `accord_telemetry` / `accord_machine`: read live sensors or cached hardware metadata,
   optionally on a linked `host`. Missing values are null; stale or unavailable data
   never proves capacity or grants ownership.
 - `accord_resources`: inspect local resources, or supply a linked `host` authority.
+  Pass the returned `cursor` for more resources and pools.
 - `accord_reserve`: request a resource or pool by its discovered full address and
   describe your purpose. Set `durationMs` for the full work window (default one hour),
   including preparation. No heartbeat is needed; a disconnected chat retains its

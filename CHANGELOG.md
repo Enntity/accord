@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+- Discovery compaction counts serialized bytes incrementally and groups pools once.
+  Local resources now appear in `find`, alongside linked resources.
+- Migration 17 adds indexes for active claims, queues, sessions, mail and manager
+  requests. Closed history no longer dominates reconciliation queries.
+- Ownership changes trigger reconciliation immediately. Up to four independent
+  resources progress concurrently, with one driver operation per resource.
+- Concurrent host reads share their in-flight observation; later reads remain fresh.
+  Window capability checks no longer fetch the full resource catalog.
+- MCP inbox, resources and board reads use pages. Session search returns compact
+  metadata, with full records and older activity available explicitly. Message
+  bodies and durable history remain complete. Legacy HTTP defaults are preserved.
+- Memory indexing runs in a reusable worker, transcript reads avoid overlapping
+  windows, and quiet-session checks skip resolved historical sessions.
+
+See [performance evidence](docs/PERFORMANCE.md) for measurements and tradeoffs.
+
 ## 0.6.7
 
 - A session that has sent no heartbeat for 36 hours, the same window observers use for

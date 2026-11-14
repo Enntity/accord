@@ -386,3 +386,17 @@ test('a linked host answer is checked and capped before an agent sees it', () =>
   assert.deepEqual(peerEntries({ entries: 'nope' }, 'peer'), []);
   assert.deepEqual(peerEntries(null, 'peer'), []);
 });
+
+test('closing during an asynchronous scan cannot write into a closed coordinator store',async()=>{
+  const f=fixture(),{store,p}=panorama(f,['zcode']);
+  const pending=p.scan();p.close();store.close();await pending;
+  rmSync(f.root,{recursive:true,force:true});
+});
+
+
+test('an idle memory worker can exit and the next scan recreates it',async()=>{
+  const f=fixture(),{store,p}=panorama(f,['zcode']);
+  try{await p.scan();const worker=p.worker;await worker.terminate();assert.equal(p.worker,null);
+    await p.scan();assert.notEqual(p.worker,worker);assert.equal(p.status.sources.zcode.ok,true);
+  }finally{p.close();store.close();rmSync(f.root,{recursive:true,force:true});}
+});
