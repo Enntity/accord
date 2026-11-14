@@ -128,7 +128,7 @@ export function mcpAdapter(profile,{identity=nativeSessionIdentity()}={}) {
       if(name==='accord_board'){const result=await c.board(args.after,{limit:args.limit??20,...(args.before?{before:args.before}:{}),...(args.active?{active:true}:{})});return args.detail?result:compact.board(result);}
       if(name==='accord_telemetry')return c.telemetry(args.host);
       if(name==='accord_machine')return c.metadata(args.host);
-      if(name==='accord_resources'){integer(args.limit??20,'limit',1,100);requireThat(args.cursor===undefined||typeof args.cursor==='string'&&args.cursor.length<=512,'INVALID_INPUT','Invalid resource cursor',400);return compact.resourcePage(await c.collaborate('resources',{},args.host),args);}
+      if(name==='accord_resources'){integer(args.limit??20,'limit',1,100);requireThat(args.cursor===undefined||typeof args.cursor==='string'&&args.cursor.length<=512&&/^[pr]:.+$/s.test(args.cursor),'INVALID_INPUT','Invalid resource cursor',400);return compact.resourcePage(await c.collaborate('resources',{},args.host),args);}
       if(name==='accord_process_start')return c.startProcess(args.claimId,args.key);
       if(name==='accord_process_status')return c.processStatus(args.claimId);
       if(name==='accord_claim')return cleanClaim(await c.claim(args));

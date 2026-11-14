@@ -91,3 +91,17 @@ test('session activity can page backwards without losing the full event bodies',
  const newest=awareness.read('a',{limit:7}),older=awareness.read('a',{limit:7,before:newest.previous});
  assert.equal(newest.events.length,7);assert.equal(older.events.length,7);assert(older.events.at(-1).seq<newest.events[0].seq);assert.match(newest.events.at(-1).body,/complete event 29/);
 });
+
+
+test('resource paging distinguishes a pool and resource with the same displayed ID',()=>{
+ const catalog={resources:[{id:'host/shared',plugin:'cooperative',state:'unknown'}],pools:[{id:'host/shared',capacity:2,free:1}]};
+ const first=resourcePage(catalog,{limit:1}),second=resourcePage(catalog,{limit:1,cursor:first.cursor});
+ assert.equal((first.resources.length+(first.pools?.length??0)),1);
+ assert.equal((second.resources.length+(second.pools?.length??0)),1);
+ assert.equal([first,second].flatMap(p=>p.resources).length,1);assert.equal([first,second].flatMap(p=>p.pools??[]).length,1);
+ assert.equal(second.cursor,undefined);
+});
+test('an oversized board event retains its position for an explicit detail read',()=>{
+ const view=compactBoard({tasks:[],claims:[],sessions:[],resources:[],events:[{seq:101,data:'z'.repeat(30000)}],cursor:101,hasMore:false});
+ assert.equal(view.events.length,0);assert.equal(view.cursor,100);assert.equal(view.hasMore,true);assert.equal(view.moreEvents,1);
+});

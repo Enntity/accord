@@ -21,7 +21,9 @@ python scripts/benchmark-tokens.py evidence/before/token-fixtures.json evidence/
 The optional Python script uses `tiktoken` in a separate development environment;
 it is not a product dependency. It counts serialized tool definitions and synthetic
 message payloads, not provider-specific framing, reasoning, tool-call or cache
-charges. The JSON harness records a SHA-256 of the source tree, Git revision,
+charges. It aligns delivery IDs, sender/recipient addresses and timestamps to the
+first fixture, verifies identical message bodies, and preserves page boundaries
+and cursor calls so random metadata cannot skew the comparison. The JSON harness records a SHA-256 of the source tree, Git revision,
 runtime, CPU, response bytes, p50/p95 and query plans. All fixtures are temporary.
 
 The history benchmark directly seeds up to 100,000 completed tasks/claims to test
@@ -37,44 +39,44 @@ Measured on Apple M2 Max, macOS arm64, Node 22.19.0. Baseline is
 `4755eae3314df894b0f661864ccba5d46106565e` (0.6.7). Three repetitions per
 checkout; tables show the median of run medians and the median of run p95s.
 Initial runs alternated baseline/candidate order; final candidate runs were
-repeated sequentially after the transcript-boundary fix. No other qualification
+repeated sequentially after the transcript and paging-boundary fixes. No other qualification
 suite ran alongside the measurements.
 
 The baseline source-tree digest was
 `e21983d9a8ffffa681515fe0c62fcfd5c3ef51be56c087fa36cf132a2859b816`;
 the candidate digest was
-`08577e206e77065a5430c4965e733e36dd47457129763cdb4d3d9b9960a1ee14`.
+`e3a749c61ccf3dda70a7f09932c157d1ea97e0dd1f161b30c2c41661b4a67117`.
 These hash all `src/` files with relative names using `benchmark.mjs`'s algorithm.
 
 | Fixture | Baseline p50 / p95 (ms) | Candidate p50 / p95 (ms) |
 | --- | ---: | ---: |
-| Compact 64 resources | 0.168 / 0.264 | 0.069 / 0.271 |
-| Compact 512 resources | 18.880 / 19.423 | 0.519 / 0.710 |
-| Compact 2,048 resources | 325.114 / 341.192 | 1.983 / 2.183 |
-| Pending claims, 100k closed claims | 6.453 / 7.097 | 0.007 / 0.009 |
-| Queue scheduling, 100k completed tasks | 3.700 / 4.291 | 0.010 / 0.013 |
-| Full historical board, 100k tasks/claims | 350.113 / 460.800 | 388.203 / 495.626 |
-| Live board after 100k completed tasks | 357.384 / 485.871 | 0.059 / 0.065 |
-| Newest 20-task page after 100k tasks | 353.227 / 459.644 | 0.164 / 2.725 |
-| One HTTP host read, eight resources | 2.327 / 3.201 | 2.233 / 3.029 |
-| HTTP bootstrap | 2.427 / 3.244 | 2.212 / 3.205 |
-| 16 concurrent HTTP host reads | 21.814 / 25.157 | 5.225 / 10.489 |
-| Full reservation workflow | 90.401 / 95.921 | 87.225 / 91.209 |
-| Scan one 512 KiB memory file | 0.910 / 4.195 | 1.216 / 32.038 |
-| Scan 128 × 512 KiB memory files | 62.299 / 67.678 | 67.944 / 71.760 |
-| Event-loop timer delay during 128-file scan | 62.356 / 67.870 | 1.207 / 1.252 |
+| Compact 64 resources | 0.168 / 0.264 | 0.067 / 0.253 |
+| Compact 512 resources | 18.880 / 19.423 | 0.511 / 0.649 |
+| Compact 2,048 resources | 325.114 / 341.192 | 1.942 / 2.216 |
+| Pending claims, 100k closed claims | 6.453 / 7.097 | 0.008 / 0.010 |
+| Queue scheduling, 100k completed tasks | 3.700 / 4.291 | 0.011 / 0.012 |
+| Full historical board, 100k tasks/claims | 350.113 / 460.800 | 396.032 / 490.003 |
+| Live board after 100k completed tasks | 357.384 / 485.871 | 0.062 / 0.069 |
+| Newest 20-task page after 100k tasks | 353.227 / 459.644 | 0.162 / 3.138 |
+| One HTTP host read, eight resources | 2.327 / 3.201 | 2.206 / 3.218 |
+| HTTP bootstrap | 2.427 / 3.244 | 2.563 / 3.296 |
+| 16 concurrent HTTP host reads | 21.814 / 25.157 | 5.382 / 10.049 |
+| Full reservation workflow | 90.401 / 95.921 | 89.476 / 94.584 |
+| Scan one 512 KiB memory file | 0.910 / 4.195 | 1.195 / 32.152 |
+| Scan 128 × 512 KiB memory files | 62.299 / 67.678 | 69.975 / 73.414 |
+| Event-loop timer delay during 128-file scan | 62.356 / 67.870 | 1.342 / 1.446 |
 
 Synchronous functions use three warmups and 31 samples, except board views use
 seven. HTTP reads/workflows use three warmups and 21 samples (11 for bursts).
 Memory uses seven scans; the first one includes worker startup, explaining the
 one-file p95. The baseline ignores the new board options and returns full history;
 those rows compare the equivalent caller need, not identical response contents.
-Full export is retained and was 10.9% slower in this fixture; it is not a claimed
+Full export is retained and was 13.1% slower in this fixture; it is not a claimed
 improvement. Ordinary reservation latency changed modestly. The independent-driver
 regression separately proves progress while another driver is stalled.
 
-Inserting the final 90,000 closed task/claim pairs took 557.8 ms before and 782.7 ms
-after (+40.3%). Database plus WAL size at 100,000 pairs grew from 27,270,088 to
+Inserting the final 90,000 closed task/claim pairs took 557.8 ms before and 786.8 ms
+after (+41.0%). Database plus WAL size at 100,000 pairs grew from 27,270,088 to
 30,807,520 bytes (+13.0%). This synthetic bulk write includes the new historical
 claim lookup index. These are real costs of faster reads; no durability settings
 were weakened to reduce them. Whole-process peak RSS for the mixed benchmark
@@ -88,14 +90,14 @@ versus 426,968 (+0.85%). Exact token counts for the recorded payloads:
 | Payload | o200k baseline → candidate | cl100k baseline → candidate |
 | --- | ---: | ---: |
 | Default 12-tool catalog | 911 → 923 | 884 → 894 |
-| First inbox response | 79,279 → 4,013 | 79,181 → 4,007 |
-| Entire backlog, requests + responses | 79,290 → 80,809 | 79,193 → 80,723 |
+| First inbox response | 79,279 → 4,004 | 79,181 → 3,996 |
+| Entire backlog, requests + responses | 79,290 → 80,728 | 79,193 → 80,633 |
 
-First-response tokens drop 94.9%; consuming the entire backlog adds about 1.9%.
+First-response tokens drop about 95%; consuming the entire backlog adds about 1.8%.
 The default catalog remains below 4 KiB (3,984 → 3,969 bytes), with 12 extra
 o200k tokens for the new controls after shortening descriptions. IDs and message
-timestamps vary between runs, so token totals can vary slightly; full message
-bodies are identical. This pass preserves the 12 default tools and lazy access
+timestamps are aligned between each baseline/candidate pair; rerunning the
+baseline can still change absolute totals slightly. Full message bodies are identical. This pass preserves the 12 default tools and lazy access
 to uncommon tools through `accord_more`.
 
 
@@ -149,7 +151,7 @@ work and unbounded presentation; unchanged paths retain their existing contracts
 
 ## Verification
 
-Local `npm run verify` passed 311 tests and checked 114 JavaScript modules. The
+Local `npm run verify` passed 313 tests and checked 114 JavaScript modules. The
 recovery, bootstrap and process demos passed; coordinator events and driver audit
 confirmed that unknown release blocks reassignment, generations advance, stale
 writers are rejected, dependencies remain gated and grants do not overlap.
@@ -159,7 +161,8 @@ two-session discovery, message delivery/read, reservation release, and telemetry
 New regressions cover Unicode byte budgeting, complete inbox bodies across pages
 and acknowledgements, cursor ownership, task/history paging, query plans,
 concurrent observation coalescing, progress beside a stalled driver, lightweight
-capability checks, worker closure/recreation and a transcript record crossing the
+capability checks, resource/pool name collisions, oversized-event cursor continuity,
+worker closure/recreation and a transcript record crossing the
 head/tail boundary. Existing ownership, recovery, provider, migration, privacy,
 installer and client tests remain in the qualification run.
 

@@ -63,12 +63,13 @@ export function bound(view,maxBytes,fields){
 }
 
 export function board(result){
+  const previousEvent=Math.max(0,(result.events[0]?.seq??result.cursor+1)-1);
   const view={...result,
     tasks:result.tasks.map(t=>clean({id:t.id,title:clip(t.title,120),state:t.state,resource:t.resource,dependency:t.dependency,blockedBy:t.blockedBy})),
     claims:result.claims.map(c=>clean({id:c.id,task:c.task_id,actor:c.actor,generation:c.generation,state:c.state,deadline:c.deadline,error:c.error})),
     next:'Use detail:true with the same before/limit for complete task records; nextBefore continues older tasks.'};
   bound(view,24*1024,[['events','moreEvents'],['sessions','moreSessions'],['claims','moreClaims'],['resources','moreResources']]);
-  if(view.moreEvents){view.cursor=view.events.at(-1)?.seq??Math.max(0,(result.events[0]?.seq??1)-1);view.hasMore=true;}
+  if(view.moreEvents){view.cursor=view.events.at(-1)?.seq??previousEvent;view.hasMore=true;}
   return view;
 }
 
@@ -80,14 +81,14 @@ export function sessions(result){
 }
 
 // Stable ID pages retain complete compact records and pool summaries. A cursor
-// is an exclusive ID, so additions/removals before it cannot shift the next page.
+// includes record kind: a legacy resource and a pool can share a displayed ID.
 export function resourcePage(result,{cursor='',limit=20}={}){
-  const compact=resources(result.resources,result.pools),rows=[...(compact.resources??[]).map(value=>({kind:'resources',value})),...(compact.pools??[]).map(value=>({kind:'pools',value}))]
-    .filter(r=>r.value.id>cursor).sort((a,b)=>a.value.id<b.value.id?-1:a.value.id>b.value.id?1:0);
+  const after=cursor?`${cursor.slice(2)}\0${cursor[0]}`:'',compact=resources(result.resources,result.pools),rows=[...(compact.resources??[]).map(value=>({kind:'resources',value})),...(compact.pools??[]).map(value=>({kind:'pools',value}))]
+    .map(r=>({...r,key:`${r.value.id}\0${r.kind[0]}`})).filter(r=>r.key>after).sort((a,b)=>a.key<b.key?-1:a.key>b.key?1:0);
   const page={resources:[],...(result.inboxPending?{inboxPending:result.inboxPending}:{}),...(result.deliveryProblems?{deliveryProblems:result.deliveryProblems}:{})};
   let bytes=Buffer.byteLength(JSON.stringify(page)),count=0,last;
   for(const {kind,value} of rows){const size=Buffer.byteLength(JSON.stringify(value))+16;if(count>=limit||(count&&bytes+size>8192-512))break;
-    (page[kind]??=[]).push(value);bytes+=size;count++;last=value.id;}
+    (page[kind]??=[]).push(value);bytes+=size;count++;last=`${kind[0]}:${value.id}`;}
   if(bytes>8192-512)page.oversized=true;
   if(count<rows.length){page.more=true;page.cursor=last;}
   return page;
