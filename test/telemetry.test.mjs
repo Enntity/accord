@@ -12,7 +12,7 @@ import { driverHost } from '../src/driver-host.mjs';
 import { coordinator } from '../src/server.mjs';
 import { listen,request,token } from '../src/common.mjs';
 import { AccordClient } from '../src/client.mjs';
-import { toolCatalog,mcpAdapter } from '../src/mcp.mjs';
+import { toolCatalog,mcpAdapter,listedTools } from '../src/mcp.mjs';
 import { delay,eventually } from './helpers.mjs';
 
 const sample={cpu:{utilization:50,logicalCpus:8,loadAverage:[1,2,3]},memory:{pressureUtilization:25,totalBytes:2**34},gpu:{utilization:80,temperatureC:60,powerDrawW:40,devices:[{name:'Fixture GPU'}]},thermal:{hottestC:65},collectors:[{id:'fixture',status:'available'}]};
@@ -115,6 +115,22 @@ test('MCP exposes telemetry and metadata through the enrolled session',async t=>
     await adapter.call('accord_bootstrap',{});
     assert.equal((await adapter.call('accord_telemetry',{})).host.fixture,'mcp');
     assert.equal((await adapter.call('accord_machine',{})).machine.fixture,'mcp');
+  }finally{await adapter.close();if(old)process.env.ACCORD_SESSION_FILE=old;}
+});
+
+test('MCP names a session through the less common tools',async t=>{
+  const h=await hostFixture(t,'titles'),profile=join(h.data,'profile.json');
+  writeFileSync(profile,JSON.stringify({schema:1,authority:h.config.authority,url:h.url,enrollmentFile:join(h.data,'bootstrap.token'),discoveryFile:join(h.data,'discovery.token')}));
+  const old=process.env.ACCORD_SESSION_FILE;delete process.env.ACCORD_SESSION_FILE;
+  const adapter=mcpAdapter(profile);
+  try{
+    assert.equal(listedTools().some(t=>t.name==='accord_title'),false);
+    assert((await adapter.call('accord_more',{})).tools.some(t=>t.name==='accord_title'));
+    const {address}=await adapter.call('accord_bootstrap',{label:'claude',activity:'porting'}),id=address.split('/')[1];
+    assert.equal((await adapter.call('accord_more',{tool:'accord_title',args:{id,title:'GLM port'}})).givenTitle,'GLM port');
+    const listed=(await adapter.call('accord_sessions',{})).sessions.find(s=>s.id===id);
+    assert.deepEqual([listed.title,listed.titledBy],['GLM port',address]);
+    await assert.rejects(adapter.call('accord_title',{id}),{code:'INVALID_INPUT'});
   }finally{await adapter.close();if(old)process.env.ACCORD_SESSION_FILE=old;}
 });
 

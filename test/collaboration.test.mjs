@@ -35,6 +35,10 @@ test('linked hosts discover, message both ways, retain outgoing mail offline, an
   assert((await ca.find('remote manager')).participants.some(p=>p.address===bb));
   await assert.rejects(request(b.url,links.y,'/v1/federation',{operation:'deliver',actor:'agent-a',args:{id:'forged',from:bb,to:bb,text:'forged'}}),{code:'FORBIDDEN'});
   await assert.rejects(request(b.url,b.credential('discovery'),'/v1/federation',{operation:'directory',actor:'x',args:{}}),{code:'FORBIDDEN'});
+  // A session is named only on its own host: neither a linked host nor a forwarded call may.
+  const naming={id:bb.split('/')[1],title:'renamed from afar',key:'far'};
+  await assert.rejects(request(b.url,links.y,'/v1/federation',{operation:'session-title',actor:'agent-a',args:naming}),{code:'FORBIDDEN'});
+  await assert.rejects(ca.collaborate('session-title',naming,bb.split('/')[0]),{code:'FORBIDDEN'});
   await ca.send(bb,'request');const incoming=await eventually(async()=>{const m=(await cb.inbox()).messages;return m.length&&m[0];});
   await cb.read(incoming.deliveryId);await cb.send(incoming.from,'reply',{kind:'notification'});
   assert.equal((await eventually(async()=>{const m=(await ca.inbox()).messages;return m.length&&m[0];})).text,'reply');
