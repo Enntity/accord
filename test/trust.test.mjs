@@ -3,8 +3,8 @@ import { querySchema } from '../src/query-schema.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { randomUUID } from 'node:crypto';
-import { readFileSync,statSync,writeFileSync,existsSync,mkdtempSync,rmSync } from 'node:fs';
+import { randomUUID,createHash } from 'node:crypto';
+import { readFileSync,statSync,writeFileSync,existsSync,mkdtempSync,rmSync,mkdirSync,symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -44,6 +44,50 @@ posixTest('local clients reach the service over a socket only its owner can use'
   const endpoints=JSON.parse(readFileSync(join(h.data,'endpoints.json')));assert.equal(endpoints.local,url);
   writeFileSync(join(h.data,'connection.json'),JSON.stringify({schema:1,authority:'x',endpointFile:join(h.data,'endpoints.json')}));
   assert.equal(profileAt(join(h.data,'connection.json')).url,url);
+});
+
+// A data directory too long for `accord.sock` moves the socket to a private /tmp directory.
+const longData=(t,tag)=>{
+  // tmpdir() is short on Linux; nest until the socket path exceeds the limit on any platform.
+  let data=join(tmpdir(),'accord-test-'+tag);t.after(()=>rmSync(data,{recursive:true,force:true}));
+  while(Buffer.byteLength(join(data,'accord.sock'))<104) data=join(data,'nested');
+  return data;
+};
+const fallbackRoot=data=>join('/tmp','accord-'+createHash('sha256').update(data).digest('hex').slice(0,16));
+
+posixTest('a long data directory still serves its local socket from a private fallback',async t=>{
+  const data=longData(t,'long'),fallback=fallbackRoot(data);mkdirSync(data,{recursive:true});
+  const h=await harness({dir:data});t.after(()=>h.close(false));
+  const socket=join(fallback,'accord.sock'),endpoints=JSON.parse(readFileSync(join(data,'endpoints.json')));
+  assert.equal(endpoints.local,`unix:${socket}`);assert.equal(statSync(fallback).mode&0o777,0o700);assert.equal(statSync(socket).mode&0o777,0o600);
+  assert.equal((await request(endpoints.local,h.credential('admin'),'/v1/me')).role,'admin');
+  await h.close(false);
+  assert.equal(existsSync(socket),false);assert.equal(existsSync(fallback),false);
+  rmSync(data,{recursive:true,force:true});
+});
+
+posixTest('a hostile fallback directory is refused',async t=>{
+  const data=longData(t,'hostile'),fallback=fallbackRoot(data);mkdirSync(data,{recursive:true});
+  const real=join(tmpdir(),'accord-test-hostile-target');mkdirSync(real,{recursive:true});symlinkSync(real,fallback);
+  t.after(()=>rmSync(fallback,{recursive:true,force:true}));t.after(()=>rmSync(real,{recursive:true,force:true}));
+  await assert.rejects(harness({dir:data}),/Unsafe fallback socket directory|DATA_PATH/);
+  rmSync(data,{recursive:true,force:true});
+});
+
+posixTest('the hook finds the fallback socket through endpoints.json',async t=>{
+  const data=longData(t,'hook'),fallback=fallbackRoot(data);mkdirSync(data,{recursive:true});
+  const h=await harness({dir:data});t.after(()=>h.close(false));
+  const profile=join(data,'connection.json'),authority=(await h.client('admin').host()).authority;
+  writeFileSync(profile,JSON.stringify({schema:1,authority,endpointFile:join(data,'endpoints.json')}));
+  // The hold hook polls the socket in endpoints.json: a waiting message ends it with a block.
+  await request(h.url,h.credential('admin'),'/v1/collaboration',{operation:'send',args:{key:randomUUID(),to:`${authority}/deadbeef`,text:'held'}}).catch(()=>{});
+  const stop=JSON.stringify({session_id:'native-one',hook_event_name:'Stop'});
+  const result=await new Promise(resolve=>{
+    const p=spawn('/bin/sh',[hookScript,'hold','--accord-context-hook','--source','codex','--profile',profile,'--data',data,'--node',process.execPath],{stdio:['pipe','pipe','pipe']});
+    let out='';p.stdout.on('data',x=>out+=x);p.stdin.end(stop);const timer=setTimeout(()=>{p.kill();resolve('timeout')},15000);
+    p.once('exit',code=>{clearTimeout(timer);resolve({code,out});});
+  });
+  assert.equal(typeof result,'object','the hook exited, so its socket path worked');assert.notEqual(result.code,1);
 });
 
 posixTest('no hook sends a credential to whatever holds the TCP port',async t=>{
