@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.9
 
 - `accord_title` (through `accord_more`; CLI `title`) gives any session a display name
   for the operator and other agents, addressed by id or by an adapter's source and
