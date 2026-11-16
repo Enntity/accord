@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- A `session-report` whose `sourceProgressAt` runs slightly ahead of the coordinator's
+  clock is clamped to now instead of rejected, so an adapter on a faster clock no longer
+  loses its reports; a timestamp more than a day ahead is still `INVALID_INPUT`.
 - A data directory whose `accord.sock` path exceeds the platform socket limit no longer
   fails `up` with `DATA_PATH`: the local socket binds in a private `/tmp` directory
   instead (`0700`, the socket `0600`, a symlinked or foreign-owned path is refused), is

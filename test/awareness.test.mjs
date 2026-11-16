@@ -490,3 +490,10 @@ test('an adapter reads back every session it reported, however long since the la
   assert.throws(()=>f.v.list({source:''}),{code:'INVALID_INPUT'});
 });
 function s_(f,n){f.advance(1000);f.report(f.admin,{source:'codex',externalId:'thread-'+n,title:'codex '+n});}
+test('a source timestamp slightly ahead is clamped; a day ahead is still refused',t=>{
+  const f=fixture(t),now=f.now();
+  const ahead=f.report(f.admin,{source:'tessera',externalId:'tile-ahead',title:'Clock a tick ahead',sourceProgressAt:now+500});
+  assert.equal(ahead.progressAt,now);
+  assert.ok(ahead.progressAt<=now);
+  assert.throws(()=>f.report(f.admin,{key:'far',source:'tessera',externalId:'tile-far',title:'From the future',sourceProgressAt:now+2*86400000}),{code:'INVALID_INPUT'});
+});
