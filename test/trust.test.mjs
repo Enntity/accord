@@ -48,8 +48,9 @@ posixTest('local clients reach the service over a socket only its owner can use'
 
 // A data directory too long for `accord.sock` moves the socket to a private /tmp directory.
 const longData=(t,tag)=>{
-  const data=join(tmpdir(),'accord-test-'+tag+'-'+ 'x'.repeat(60));t.after(()=>rmSync(data,{recursive:true,force:true}));
-  assert.ok(Buffer.byteLength(join(data,'accord.sock'))>=104,'fixture path must exceed the socket limit');
+  // tmpdir() is short on Linux; nest until the socket path exceeds the limit on any platform.
+  let data=join(tmpdir(),'accord-test-'+tag);t.after(()=>rmSync(data,{recursive:true,force:true}));
+  while(Buffer.byteLength(join(data,'accord.sock'))<104) data=join(data,'nested');
   return data;
 };
 const fallbackRoot=data=>join('/tmp','accord-'+createHash('sha256').update(data).digest('hex').slice(0,16));
