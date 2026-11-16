@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- A data directory whose `accord.sock` path exceeds the platform socket limit no longer
+  fails `up` with `DATA_PATH`: the local socket binds in a private `/tmp` directory
+  instead (`0700`, the socket `0600`, a symlinked or foreign-owned path is refused), is
+  published through `endpoints.json`'s `local` URL like before, and is removed with its
+  empty directory on close. `hook.sh` finds it through `endpoints.json`, so hold and
+  wake keep working for long data paths.
+
 ## 0.6.9
 
 - `accord_title` (through `accord_more`; CLI `title`) gives any session a display name
