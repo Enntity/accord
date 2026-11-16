@@ -13,10 +13,10 @@ second authority or copy tokens between hosts. Keep the previous package availab
 binary rollback; database rollback is a separate recovery operation and can invalidate
 fencing history. See [recovery](RECOVERY.md).
 
-## Install 0.6.8
+## Install 0.6.9
 
 ```sh
-npm install -g https://github.com/Enntity/accord/releases/download/v0.6.8/enntity-accord-0.6.8.tgz
+npm install -g https://github.com/Enntity/accord/releases/download/v0.6.9/enntity-accord-0.6.9.tgz
 accord install
 ```
 
@@ -47,13 +47,25 @@ accord --version
 accord doctor
 ```
 
-The CLI should report `0.6.8`; the doctor should report `ready`. The CLI version identifies
+The CLI should report `0.6.9`; the doctor should report `ready`. The CLI version identifies
 the package invoked by your shell, so also check the running service's command line
 against the new install path. Restart your agent sessions to load the updated MCP bridge.
 
 On linked hosts, verify `accord find`, send and acknowledge a test message, and exercise
 reserve, extend and release on a dedicated cooperative resource. Check that extension
 keeps the claim and generation. Do not use an active GPU workload as a smoke test.
+
+## Changes from 0.6.8
+
+Migration 18 adds three nullable `session_views` columns for the given session title
+and upgrades a 0.6.8 database in place; existing migration checksums and stored
+records are unchanged. The old 0.6.8 binary does not understand migration 18 and
+will refuse that database; keep the normal upgrade/recovery precautions above.
+Never delete the migration record or restore older fencing history just to make a
+downgrade start.
+
+`session-title` names are local to each authority and never cross a link, so upgrade
+all linked hosts together. See [API](API.md) and [session backplane](SESSION-BACKPLANE.md).
 
 ## Changes from 0.6.7
 
