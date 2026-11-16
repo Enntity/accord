@@ -22,7 +22,7 @@ test('v15 upgrade preserves an existing heartbeat deadline, generation and comma
   c.close();old.close();
   const v15=new DatabaseSync(file);
   for(const [,name] of querySchema.matchAll(/CREATE INDEX (\w+)/g))v15.exec(`DROP INDEX ${name}`);
-  v15.exec('ALTER TABLE reservations DROP COLUMN duration_ms; DELETE FROM migrations WHERE version>=16');
+  v15.exec('ALTER TABLE session_views DROP COLUMN given_title; ALTER TABLE session_views DROP COLUMN titled_by; ALTER TABLE session_views DROP COLUMN titled_at; ALTER TABLE reservations DROP COLUMN duration_ms; DELETE FROM migrations WHERE version>=16');
   const checksums=v15.prepare('SELECT * FROM migrations').all();v15.close();
   const upgraded=new Store(file,{now:()=>0});
   t.after(()=>{upgraded.close();rmSync(dir,{recursive:true,force:true});});

@@ -134,6 +134,7 @@ export class SessionAwareness {
       ...(!row.private && row.parent_session ? {parentSession:JSON.parse(row.parent_session)} : {}),
       ...(!row.private && origin ? {originAddress:origin.authority+'/'+origin.session_id} : {}),
       ...(binding ? {nativeSession:{source:binding.source,externalId:binding.external_id}} : {}),
+      ...(!row.private && row.given_title ? {givenTitle:row.given_title,titledBy:`${this.store.authority}/${row.titled_by}`,titledAt:row.titled_at} : {}),
       id: row.id,
       address: `${this.store.authority}/${row.id}`,
       source: row.source,
@@ -317,6 +318,7 @@ export class SessionAwareness {
           Number(changed),
           Number(changed),
         );
+      if(privacy) this.db.prepare('UPDATE session_views SET given_title=NULL,titled_by=NULL,titled_at=NULL WHERE id=?').run(session);
       if(body.parentSession !== undefined || privacy) this.db.prepare('UPDATE session_views SET parent_session=? WHERE id=?').run(privacy||!body.parentSession?null:JSON.stringify({source:body.parentSession.source,externalId:body.parentSession.externalId}),session);
       if (privacy) {
         this.db
@@ -371,7 +373,7 @@ export class SessionAwareness {
     if (!r.private && !r.hidden)
       this.db.prepare("INSERT INTO session_search VALUES(?,?,?,?,?,?)").run(
         session,
-        r.title,
+        r.given_title ? r.given_title + "\n" + r.title : r.title,
         r.location,
         r.detail,
         r.summary,
@@ -404,7 +406,7 @@ export class SessionAwareness {
           .all(body.source)) {
           this.db
             .prepare(
-              "UPDATE session_views SET private=1,title='Private session',location='',detail='',summary='',revision=revision+1 WHERE id=?",
+              "UPDATE session_views SET private=1,title='Private session',location='',detail='',summary='',given_title=NULL,titled_by=NULL,titled_at=NULL,revision=revision+1 WHERE id=?",
             )
             .run(row.id);
           this.db
@@ -453,8 +455,11 @@ export class SessionAwareness {
       return { expired: stale.length };
     });
   }
-  list({ query = "", limit = 50 } = {}) {
+  // `source` narrows to one adapter's sessions, live ones first, so an adapter can read back
+  // all it reported: the default list is the most recent progress, and a name is not progress.
+  list({ query = "", limit = 50, source } = {}) {
     integer(limit, "limit", 1, 200);
+    if (source !== undefined) text(source, "source", 64);
     requireThat(
       typeof query === "string" && query.length <= 200,
       "INVALID_INPUT",
@@ -465,9 +470,15 @@ export class SessionAwareness {
     const rows = words.length
       ? this.db
           .prepare(
-            `SELECT v.* FROM session_search f JOIN session_views v ON v.id=f.session_id WHERE v.hidden=0 AND session_search MATCH ? ORDER BY rank LIMIT ?`,
+            `SELECT v.* FROM session_search f JOIN session_views v ON v.id=f.session_id WHERE v.hidden=0 AND (:source IS NULL OR v.source=:source) AND session_search MATCH :match ORDER BY rank LIMIT :limit`,
           )
-          .all(words.map((w) => '"' + w + '"').join(" AND "), limit)
+          .all({ source: source ?? null, match: words.map((w) => '"' + w + '"').join(" AND "), limit })
+      : source !== undefined
+      ? this.db
+          .prepare(
+            "SELECT * FROM session_views WHERE hidden=0 AND source=? ORDER BY state='exited',progress_at DESC LIMIT ?",
+          )
+          .all(source, limit)
       : this.db
           .prepare(
             "SELECT * FROM session_views WHERE hidden=0 ORDER BY progress_at DESC LIMIT ?",
@@ -524,6 +535,28 @@ export class SessionAwareness {
         .run(redact(summary), revision, JSON.stringify(extra), session);
       this.index(session);
       return { accepted: true };
+    });
+  }
+  // A display name for the operator and other agents. It is attributed, it is not progress,
+  // and it grants nothing: the owner's title, state and mailbox are untouched.
+  title(actor, body) {
+    const byId = body.id !== undefined;
+    requireThat(byId !== (body.source !== undefined || body.externalId !== undefined), "INVALID_INPUT",
+      "Name a session by id, or by source and externalId", 400);
+    requireThat(typeof body.title === "string" && body.title.length <= 120, "INVALID_INPUT",
+      "title must be a string of at most 120 characters; empty removes the name", 400);
+    const row = byId ? this.row(text(body.id, "id", 200))
+      : this.db.prepare("SELECT * FROM session_views WHERE source=? AND external_id=?")
+          .get(text(body.source, "source", 64), text(body.externalId, "externalId", 200));
+    requireThat(row && !row.hidden, "NOT_FOUND", "Unknown observed session", 404);
+    requireThat(!row.private, "PRIVATE_SESSION", "Session content is private", 403);
+    const given = redact(body.title).replace(/\s+/g, " ").trim() || null;
+    return this.store.command(actor, body, "session.title", () => {
+      this.db.prepare("UPDATE session_views SET given_title=?,titled_by=?,titled_at=? WHERE id=?")
+        .run(given, given && actor.id, given && this.store.now(), row.id);
+      this.index(row.id);
+      this.store.emit("session.titled", { session: row.id, by: actor.id, named: given !== null });
+      return this.public(this.row(row.id));
     });
   }
   snooze(actor, body) {

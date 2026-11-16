@@ -254,6 +254,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     if(operation==='memories')return memory.list(args);
     if(operation==='memory-read')return memory.read(args.id);
     if(operation==='session-snooze')return awareness.snooze(actor,args);
+    if(operation==='session-title')return awareness.title(actor,args);
     if(operation==='jobs')return awareness.jobs();
     if(operation==='job')return awareness.job(actor,args);
     if(operation==='ask')return awareness.ask(actor,args);

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { bootstrap,find,resources } from '../src/compact.mjs';
+import { bootstrap,find,resources,sessions } from '../src/compact.mjs';
 
 const person=(n,extra={})=>({kind:'participant',state:'working',address:'host/'+n,label:'Agent '+n,activity:'x'.repeat(1000),location:'',capabilities:[],harness:'mcp',presence:'recent',lastSeen:n,...extra});
 const hosts=[{authority:'a',status:'observed'},{authority:'b',status:'observed'},{authority:'b',status:'observed'},{authority:'c',status:'unknown'}];
@@ -83,4 +83,11 @@ test('the find bound also covers pools, and counts what it dropped',()=>{
   const hosts=Array.from({length:40},(_,h)=>({authority:'host'+h,status:'observed',resources:Array.from({length:20},(_,i)=>slot('host'+h,i))}));
   const view=find({participants:[],hosts});
   assert(Buffer.byteLength(JSON.stringify(view))<=8192);assert.equal(view.pools.length+view.moreResources,800);
+});
+
+test('a given session title is the one an agent reads, with who gave it',()=>{
+  const row=(id,extra={})=>({id,address:'h/'+id,title:'claude',state:'working',summary:'',location:'',presence:'recent',source:'agent',progressAt:1,...extra});
+  const view=sessions({sessions:[row('a',{givenTitle:'GLM port',titledBy:'h/b',titledAt:5}),row('c')]});
+  assert.deepEqual([view.sessions[0].title,view.sessions[0].titledBy],['GLM port','h/b']);
+  assert.equal(view.sessions[1].title,'claude');assert.equal('titledBy' in view.sessions[1],false);
 });

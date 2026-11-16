@@ -60,7 +60,9 @@ export class Store {
       // NULL declares nothing, so the reservation default applies.
       "ALTER TABLE resource_bindings ADD COLUMN max_ownership_ms INTEGER;ALTER TABLE resource_bindings ADD COLUMN allow_indefinite INTEGER NOT NULL DEFAULT 0;",
       // Migration 16: a finite window is owned by the daemon, not a chat heartbeat.
-      "ALTER TABLE reservations ADD COLUMN duration_ms INTEGER;",querySchema]); this.now = now; this.leaderMs = leaderMs;
+      "ALTER TABLE reservations ADD COLUMN duration_ms INTEGER;",querySchema,
+      // A name another participant gives a session. The owner's own title is never overwritten.
+      "ALTER TABLE session_views ADD COLUMN given_title TEXT;ALTER TABLE session_views ADD COLUMN titled_by TEXT;ALTER TABLE session_views ADD COLUMN titled_at INTEGER;"]); this.now = now; this.leaderMs = leaderMs;
     transaction(this.db, () => {
       this.db.prepare("INSERT OR IGNORE INTO meta VALUES('authority',?)").run(id());
       this.db.prepare("INSERT OR IGNORE INTO meta VALUES('paused','false')").run();

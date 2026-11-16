@@ -115,10 +115,10 @@ try {
       result=await c.collaborate(actions[argv[0]],{id,key,...(argv[0]==='register'?{targets:JSON.parse(readFileSync(option('file'),'utf8')).targets}:{}),...(argv[0]==='launch'?{workload:option('workload')}:{})},host);
     }
     console.log(JSON.stringify(result,null,2));
-  } else if(['sessions','session-read','report','jobs','job','ask','question','overseer','snooze'].includes(command)){
+  } else if(['sessions','session-read','report','jobs','job','ask','question','overseer','snooze','title'].includes(command)){
     process.env.ACCORD_SESSION_FILE=option('session-file',process.env.ACCORD_SESSION_FILE??join(home,'.config','accord','shell-session.json'));
     const c=inheritedClient(),body=option('input')?JSON.parse(readFileSync(option('input'),'utf8')):{};
-    const op={report:'session-report',snooze:'session-snooze'}[command]??command;
+    const op={report:'session-report',snooze:'session-snooze',title:'session-title'}[command]??command;
     console.log(JSON.stringify(await c.collaborate(op,{...body,...(option('id')?{id:option('id')}:{}),...(option('query')?{query:option('query')}:{}),key:option('key',randomUUID())},option('host')),null,2));
   } else if(['policy','signal','privacy'].includes(command)){
     const config=configuration(directory),endpoints=JSON.parse(readFileSync(join(directory,'endpoints.json'),'utf8'));

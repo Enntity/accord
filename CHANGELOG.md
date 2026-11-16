@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- `accord_title` (through `accord_more`; CLI `title`) gives any session a display name
+  for the operator and other agents, addressed by id or by an adapter's source and
+  external id. The name is attributed (`givenTitle`, `titledBy`, `titledAt`), redacted,
+  searchable, and removed with an empty title. It is not progress, leaves the owner's
+  own title in place, is cleared when a session becomes private, and cannot be set
+  from a linked host. Compact session lists show the given name. Adds one migration.
+- `sessions` accepts `source` to list one adapter's sessions, live ones first, so an
+  adapter can read back everything it reported regardless of how long ago it progressed.
+
 ## 0.6.8
 
 - Discovery compaction counts serialized bytes incrementally and groups pools once.
