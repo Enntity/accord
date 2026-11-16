@@ -279,10 +279,11 @@ export class SessionAwareness {
           "Source timestamps require a host adapter",
           403,
         );
-        integer(body.sourceProgressAt, "sourceProgressAt", 0, now);
+        // A source clock a fraction ahead of ours is clamped, not refused; a day ahead is garbage.
+        integer(body.sourceProgressAt, "sourceProgressAt", 0, now + 86400000);
       }
       const revision = (old?.revision ?? 0) + (changed ? 1 : 0),
-        progress = changed ? (body.sourceProgressAt ?? now) : old.progress_at;
+        progress = changed ? (body.sourceProgressAt == null ? now : Math.min(body.sourceProgressAt, now)) : old.progress_at;
       const summary = privacy
         ? ""
         : (detail || fresh.at(-1)?.body || old?.summary || title)
