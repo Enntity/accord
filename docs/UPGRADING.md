@@ -13,10 +13,10 @@ second authority or copy tokens between hosts. Keep the previous package availab
 binary rollback; database rollback is a separate recovery operation and can invalidate
 fencing history. See [recovery](RECOVERY.md).
 
-## Install 0.6.9
+## Install 0.6.10
 
 ```sh
-npm install -g https://github.com/Enntity/accord/releases/download/v0.6.9/enntity-accord-0.6.9.tgz
+npm install -g https://github.com/Enntity/accord/releases/download/v0.6.10/enntity-accord-0.6.10.tgz
 accord install
 ```
 
@@ -47,13 +47,21 @@ accord --version
 accord doctor
 ```
 
-The CLI should report `0.6.9`; the doctor should report `ready`. The CLI version identifies
+The CLI should report `0.6.10`; the doctor should report `ready`. The CLI version identifies
 the package invoked by your shell, so also check the running service's command line
 against the new install path. Restart your agent sessions to load the updated MCP bridge.
 
 On linked hosts, verify `accord find`, send and acknowledge a test message, and exercise
 reserve, extend and release on a dedicated cooperative resource. Check that extension
 keeps the claim and generation. Do not use an active GPU workload as a smoke test.
+
+## Changes from 0.6.9
+
+No migration; the database and configuration are unchanged. A data directory whose
+socket path exceeds the platform limit now serves its local socket from a private
+`/tmp` directory, published through `endpoints.json` as before. A `session-report`
+timestamp slightly ahead of the coordinator's clock is clamped to now instead of
+rejected.
 
 ## Changes from 0.6.8
 

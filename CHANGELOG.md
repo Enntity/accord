@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.10
 
 - A `session-report` whose `sourceProgressAt` runs slightly ahead of the coordinator's
   clock is clamped to now instead of rejected, so an adapter on a faster clock no longer
