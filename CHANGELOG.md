@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.0
 
 - Orphaned reservations (migration 20): a session retired with `tile-closed`,
   `process-exited`, `superseded` or `operator` orphans the reservations it holds
