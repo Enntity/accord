@@ -483,8 +483,11 @@ test('an adapter reads back every session it reported, however long since the la
   f.v.title(f.b,{key:'name',source:'tessera',externalId:'old-tile',title:'Hardware tests'});
   // The recent list is bounded by progress, and a name is not progress.
   assert.equal(f.v.list({limit:2}).sessions.some(s=>s.externalId==='old-tile'),false);
-  const own=f.v.list({source:'tessera',limit:2}).sessions;
+  // An exited report retires its observation; the adapter still reads it back with includeRetired.
+  const own=f.v.list({source:'tessera',limit:2,includeRetired:true}).sessions;
   assert.deepEqual(own.map(s=>[s.externalId,s.givenTitle]),[['old-tile','Hardware tests'],['closed-tile',undefined]]);
+  assert.equal(own.find(s=>s.externalId==='closed-tile').lifecycle,'retired');
+  assert.equal(f.v.list({source:'tessera',limit:2}).sessions.some(s=>s.externalId==='closed-tile'),false);
   assert.deepEqual(f.v.list({source:'tessera',query:'Hardware'}).sessions.map(s=>s.externalId),['old-tile']);
   assert.deepEqual(f.v.list({source:'nobody'}).sessions,[]);
   assert.throws(()=>f.v.list({source:''}),{code:'INVALID_INPUT'});

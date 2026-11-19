@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased
+
+- Session retirement (migration 19): sessions and observations gain `retired_at`,
+  `retired_reason` and `successor`, and public records gain a `lifecycle` field
+  (`live`/`idle`/`stale`/`exited`/`retired`) alongside the unchanged `presence`.
+  Explicit close retires with reason `closed`; the admin `lifecycle-retire`
+  operation (`accord retire`) retires a session or everything bound to a native
+  observation; a host-observed `exited`/`cancelled` report retires the observation
+  and — when the reporter owns it — its bound actors.
+- The periodic silence pass retires observations quiet for
+  `lifecycle.observedRetireMs` (default 24 h) and enrolled sessions for
+  `lifecycle.joinedRetireMs` (default 72 h) in `awareness.json`, floored by
+  `lifecycle_since` so the upgrade backlog ages from the migration. Silent
+  claim holders go `stale` with one `lifecycle.notify` notice per claim
+  generation; queued reservations of retired sessions are cancelled.
+- Retired records stay readable by id but leave `find`, `sessions`, bootstrap
+  previews and quiet-work check-ins (`includeRetired` opts back in). Retiring
+  resolves open incidents (`subject-retired`). Authenticated activity revives a
+  silence-retired session; a transcript rescan revives only with activity newer
+  than its retirement, so dead subagents stay retired. Sends to a retired
+  address fail `RECIPIENT_RETIRED` with the successor, permanently and without
+  retries, including over host links. `lifecycle-sweep`
+  (`accord lifecycle sweep [--dry-run]`) retires the true backlog on operator
+  review and emits `lifecycle.swept`.
+
 ## 0.6.10
 
 - A `session-report` whose `sourceProgressAt` runs slightly ahead of the coordinator's

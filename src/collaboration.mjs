@@ -36,7 +36,7 @@ export class Collaboration {
       return {address:this.address(actor)};
     });
   }
-  directory(query='') {
+  directory(query='',{includeRetired=false}={}) {
     requireThat(typeof query==='string'&&query.length<=200,'INVALID_INPUT','Search must be <=200 characters',400);
     const found=[];
     const needle=query.toLowerCase();
@@ -44,7 +44,8 @@ export class Collaboration {
       LEFT JOIN sessions s ON s.id=p.actor LEFT JOIN session_views v ON v.id=p.actor
       LEFT JOIN session_bindings b ON b.source=v.source AND b.external_id=v.external_id AND v.private=0
       WHERE NOT EXISTS (SELECT 1 FROM remote_routes r WHERE r.actor=p.actor)
-      AND NOT EXISTS (SELECT 1 FROM session_views hidden WHERE hidden.id=p.actor AND hidden.hidden=1)`;
+      AND NOT EXISTS (SELECT 1 FROM session_views hidden WHERE hidden.id=p.actor AND hidden.hidden=1)
+      ${includeRetired?'':'AND v.retired_at IS NULL AND (s.id IS NULL OR s.retired_at IS NULL)'}`;
     // Preserve participant-before-observation ordering without sorting the entire
     // retained directory before yielding its first row.
     function* ordered(db){
@@ -128,8 +129,8 @@ export class Collaboration {
     });
     return actor;
   }
-  async find(query='',network=true,selfAddress) {
-    const hosts=[{authority:this.store.authority,status:'observed',participants:this.directory(query)}];
+  async find(query='',network=true,selfAddress,args={}) {
+    const hosts=[{authority:this.store.authority,status:'observed',participants:this.directory(query,{includeRetired:args.includeRetired===true})}];
     if(network)hosts.push(...await Promise.all(this.db.prepare('SELECT authority FROM links').all().map(async p=>{
       // A link speaks only for its own host, however it describes itself.
       try{const {participants,observations,resources}=await this.forward(p.authority,'directory',{query},{id:'directory'}),own=r=>String(r.address??r.id).startsWith(p.authority+'/');
@@ -138,6 +139,30 @@ export class Collaboration {
     })));
     for(const host of hosts)Object.assign(host,splitDiscovery([...(host.participants??[]),...(host.observations??[])],selfAddress));
     return {hosts,participants:hosts.flatMap(h=>h.participants),observations:hosts.flatMap(h=>h.observations),guidance:discoveryGuidance};
+  }
+  // A retired recipient fails permanently. Successor chains resolve to the last
+  // known actor, never more than 10 deep.
+  retiredRecipient(session) {
+    const row = this.db.prepare('SELECT successor FROM sessions WHERE id=? AND retired_at IS NOT NULL').get(session)
+      ?? this.db.prepare('SELECT successor FROM session_views WHERE id=? AND retired_at IS NOT NULL').get(session);
+    if (!row) return null;
+    let successor = row.successor;
+    const seen = new Set([session]);
+    for (let depth = 0; successor && depth < 10; depth++) {
+      if (seen.has(successor)) break;
+      seen.add(successor);
+      const next = this.db.prepare('SELECT successor FROM sessions WHERE id=?').get(successor)?.successor
+        ?? this.db.prepare('SELECT successor FROM session_views WHERE id=?').get(successor)?.successor;
+      if (!next) break;
+      successor = next;
+    }
+    return { successor };
+  }
+  retiredError({ successor }) {
+    return Object.assign(
+      new Error(`Recipient is retired${successor ? `; use successor ${this.store.authority}/${successor}` : ''}`),
+      { code: 'RECIPIENT_RETIRED', status: 410, ...(successor ? { successor: `${this.store.authority}/${successor}` } : {}) },
+    );
   }
   recipientExists(recipient) {
     // Enrollment is enough to receive a reply, including legacy sessions that
@@ -155,7 +180,11 @@ export class Collaboration {
       requireThat(body.to.split('/').length===2,'INVALID_INPUT','Use the recipient address from find',400);
       requireThat(body.to!==this.address(actor),'SELF_MESSAGE','Send to another participant; self-messages are not supported',400);
       const [authority,recipient]=body.to.split('/');
-      if(authority===this.store.authority)requireThat(this.recipientExists(recipient),'RECIPIENT_UNKNOWN','Recipient is not registered; use an address from find or a received message',404);
+      if(authority===this.store.authority){
+        requireThat(this.recipientExists(recipient),'RECIPIENT_UNKNOWN','Recipient is not registered; use an address from find or a received message',404);
+        const retired=this.retiredRecipient(recipient);
+        if(retired)throw this.retiredError(retired);
+      }
       requireThat(authority===this.store.authority||this.db.prepare('SELECT 1 FROM links WHERE authority=?').get(authority),'HOST_UNKNOWN','Recipient host is not linked',404);
       requireThat(this.db.prepare("SELECT count(*) n FROM message_outbox WHERE state='queued'").get().n<100000,'CAPACITY_LIMIT','Pending message limit reached');
       requireThat(body.delivery===undefined||['inbox','native-prompt'].includes(body.delivery),'INVALID_INPUT','Unknown delivery preference',400);
@@ -168,6 +197,8 @@ export class Collaboration {
     text(envelope.id,'id',128);text(envelope.from,'from',220);text(envelope.text,'text',4000);
     const [authority,recipient]=String(envelope.to).split('/');
     requireThat(authority===this.store.authority&&this.recipientExists(recipient),'RECIPIENT_UNKNOWN','Recipient is not registered',404);
+    const retired=this.retiredRecipient(recipient);
+    if(retired)throw this.retiredError(retired);
     const from=this.principal(envelope.from),to=this.principal(envelope.to);
     const conversation=this.messages.createConversation(from,{members:[to.handle]});
     this.messages.sendMessage(from,{conversationId:conversation.id,clientMessageId:envelope.id,body:envelope.text,data:{id:envelope.id,from:envelope.from,to:envelope.to,kind:envelope.kind,delivery:envelope.delivery==='native-prompt'?'native-prompt':'inbox'}});
@@ -187,7 +218,12 @@ export class Collaboration {
           if(authority===this.store.authority)this.deliver(envelope);
           else await this.forward(authority,'deliver',envelope,{id:row.actor});
           this.store.mutate(()=>{this.db.prepare("UPDATE message_outbox SET state='delivered',error=NULL WHERE id=?").run(row.id);this.store.emit('message.delivered',{id:row.id});});
-        }catch(e){this.store.mutate(()=>this.db.prepare('UPDATE message_outbox SET error=? WHERE id=?').run(e.code??'HOST_UNAVAILABLE',row.id));}
+        }catch(e){
+          // A retired recipient never revives for this envelope; mark it failed
+          // permanently instead of retrying forever.
+          const permanent=e.code==='RECIPIENT_RETIRED';
+          this.store.mutate(()=>this.db.prepare(permanent?"UPDATE message_outbox SET state='failed',error=? WHERE id=?":"UPDATE message_outbox SET error=? WHERE id=?").run(e.code??'HOST_UNAVAILABLE',row.id));
+        }
       }));
     }finally{this.sending=false;}
     if(this.again){this.again=false;return this.flush();}
@@ -370,7 +406,7 @@ export class Collaboration {
     const seen=new Set(),full=new Set();
     for(const row of waiting){
       const session=this.db.prepare('SELECT * FROM sessions WHERE id=?').get(row.actor);
-      if(row.queued_until<=this.store.now()||session&&(session.closed_at!==null||session.expires_at<=this.store.now())){
+      if(row.queued_until<=this.store.now()||session&&(session.closed_at!==null||session.expires_at<=this.store.now()||session.retired_at!==null)){
         this.store.mutate(()=>this.db.prepare("UPDATE tasks SET state='cancelled' WHERE id=?").run(row.task_id));continue;
       }
       if(row.pool){

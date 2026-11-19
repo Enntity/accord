@@ -7,6 +7,7 @@ import { continuitySchema, persistentDeadline, upgradeSessionContinuity } from '
 import { discoveryCleanupSchema } from './discovery-cleanup.mjs';
 import { windowDuration } from './reservation-policy.mjs';
 import { database, transaction, hash, id, requireThat, text, integer, monotonicWallClock } from './common.mjs';
+import { applyRetirement } from './lifecycle.mjs';
 
 const schema = `
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -62,11 +63,19 @@ export class Store {
       // Migration 16: a finite window is owned by the daemon, not a chat heartbeat.
       "ALTER TABLE reservations ADD COLUMN duration_ms INTEGER;",querySchema,
       // A name another participant gives a session. The owner's own title is never overwritten.
-      "ALTER TABLE session_views ADD COLUMN given_title TEXT;ALTER TABLE session_views ADD COLUMN titled_by TEXT;ALTER TABLE session_views ADD COLUMN titled_at INTEGER;"]); this.now = now; this.leaderMs = leaderMs;
+      "ALTER TABLE session_views ADD COLUMN given_title TEXT;ALTER TABLE session_views ADD COLUMN titled_by TEXT;ALTER TABLE session_views ADD COLUMN titled_at INTEGER;",
+      // Retired rows stay readable by id; lifecycle_since floors the automatic
+      // silence pass so the pre-upgrade backlog never retires before its first
+      // threshold elapses. The explicit sweep ignores it.
+      `ALTER TABLE sessions ADD COLUMN retired_at INTEGER;ALTER TABLE sessions ADD COLUMN retired_reason TEXT;ALTER TABLE sessions ADD COLUMN successor TEXT;
+      ALTER TABLE session_views ADD COLUMN retired_at INTEGER;ALTER TABLE session_views ADD COLUMN retired_reason TEXT;ALTER TABLE session_views ADD COLUMN successor TEXT;`]); this.now = now; this.leaderMs = leaderMs;
     transaction(this.db, () => {
       this.db.prepare("INSERT OR IGNORE INTO meta VALUES('authority',?)").run(id());
       this.db.prepare("INSERT OR IGNORE INTO meta VALUES('paused','false')").run();
       this.db.prepare("INSERT OR IGNORE INTO resources(id) VALUES('artifact')").run();
+      // Seeded once, when the lifecycle columns first exist; the silence pass
+      // floors last-activity at this instant so the backlog does not retire early.
+      this.db.prepare("INSERT OR IGNORE INTO meta VALUES('lifecycle_since',?)").run(this.now());
     });
     this.authority = this.db.prepare("SELECT value FROM meta WHERE key='authority'").get().value;
   }
@@ -106,6 +115,10 @@ export class Store {
     return this.command(actor, body, `session.close:${sessionId}`, () => {
       requireThat(this.db.prepare('SELECT id FROM sessions WHERE id=?').get(sessionId), 'NOT_FOUND', 'Unknown session', 404);
       this.db.prepare('UPDATE sessions SET closed_at=COALESCE(closed_at,?) WHERE id=?').run(this.now(), sessionId);
+      // Explicit close is a permanent retirement: the credential is revoked and no
+      // heartbeat revives it. applyRetirement is a no-op on an already-retired row,
+      // keeping an earlier reason.
+      applyRetirement(this.db, (kind, data) => this.emit(kind, data), this.now(), sessionId, { reason: 'closed' });
       this.revokeSession(sessionId);
       this.emit('session.closed', {session: sessionId});
       return {closed: true, release: 'confirmation required for any held resource'};
