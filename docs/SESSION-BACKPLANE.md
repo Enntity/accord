@@ -182,7 +182,25 @@ queued reservation retires normally and its queue entry is cancelled, the same
 way a closed session's is. Retired subjects are excluded from `find`,
 `sessions`, bootstrap previews and quiet-work check-ins (`find` and
 `sessions` accept `includeRetired:true`); retiring resolves their open
-incidents with reason `subject-retired`.
+incidents with reason `subject-retired`. A holder retired by `tile-closed`,
+`process-exited`, `superseded` or `operator` also orphans each reservation it
+holds in `preparing` or `running`: the reservation marks `orphaned_at` with the
+retirement reason and releases after the resource's `orphanGraceMs` (default
+fifteen minutes), the same fence an expired lease takes. Revival inside the
+grace reclaims the hold; a successor inherits nothing and must reserve again.
+The successor and each `lifecycle.notify` address are told once when the hold
+orphans and once when it ends.
+
+Retirement and revival also propagate over host links: the retiring host enqueues
+one durable `lifecycle` notice per link (retried like mail, dropped after a
+week), and the receiving host applies the matching effect to the proxy actor in
+`remote_routes` — `closed` fences immediately, an orphaning reason orphans its
+held reservations with the grace counted from notice *receipt*, `silent` marks
+it a stale holder, and `revived` reclaims within grace. Positive end evidence
+upgrades an earlier `silent` mark on either side: an orphaning reason orphans
+then, with the grace counted from that receipt, and `closed` still fences at
+once — so a hold on another host is never stranded by an intervening silence
+retirement.
 
 Configure thresholds and notifications in `awareness.json`, which reloads on
 the observation loop:

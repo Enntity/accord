@@ -290,7 +290,7 @@ test("resource monitor routes a remote holder to its authenticated home address"
     .prepare("INSERT INTO links(authority,url,outbound,inbound_hash) VALUES(?,?,?,?)")
     .run("remote-host", "http://127.0.0.1:1", "fixture", "hash");
   f.s.db
-    .prepare("INSERT INTO remote_routes VALUES(?,?,?)")
+    .prepare("INSERT INTO remote_routes(actor,authority,session_id) VALUES(?,?,?)")
     .run("a", "remote-host", "native-agent");
   const rule = f.o.configure(f.admin, {
     key: "remote-rule",

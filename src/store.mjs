@@ -7,7 +7,7 @@ import { continuitySchema, persistentDeadline, upgradeSessionContinuity } from '
 import { discoveryCleanupSchema } from './discovery-cleanup.mjs';
 import { windowDuration } from './reservation-policy.mjs';
 import { database, transaction, hash, id, requireThat, text, integer, monotonicWallClock } from './common.mjs';
-import { applyRetirement } from './lifecycle.mjs';
+import { applyRetirement, enqueueLifecycle, orphanGraceDefaultMs, cooperativeAgeOutDefaultMs } from './lifecycle.mjs';
 
 const schema = `
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -68,7 +68,15 @@ export class Store {
       // silence pass so the pre-upgrade backlog never retires before its first
       // threshold elapses. The explicit sweep ignores it.
       `ALTER TABLE sessions ADD COLUMN retired_at INTEGER;ALTER TABLE sessions ADD COLUMN retired_reason TEXT;ALTER TABLE sessions ADD COLUMN successor TEXT;
-      ALTER TABLE session_views ADD COLUMN retired_at INTEGER;ALTER TABLE session_views ADD COLUMN retired_reason TEXT;ALTER TABLE session_views ADD COLUMN successor TEXT;`]); this.now = now; this.leaderMs = leaderMs;
+      ALTER TABLE session_views ADD COLUMN retired_at INTEGER;ALTER TABLE session_views ADD COLUMN retired_reason TEXT;ALTER TABLE session_views ADD COLUMN successor TEXT;`,
+      // Orphaned reservations keep their grace deadline durably; registered_at
+      // floors cooperative age-out so existing resources never age out at upgrade.
+      `ALTER TABLE reservations ADD COLUMN orphaned_at INTEGER;ALTER TABLE reservations ADD COLUMN orphan_reason TEXT;ALTER TABLE reservations ADD COLUMN warned_deadline INTEGER;
+      ALTER TABLE resource_bindings ADD COLUMN orphan_grace_ms INTEGER;ALTER TABLE resource_bindings ADD COLUMN age_out_ms INTEGER;ALTER TABLE resource_bindings ADD COLUMN registered_at INTEGER;
+      UPDATE resource_bindings SET registered_at=cast(strftime('%s','now') AS INTEGER)*1000 WHERE registered_at IS NULL;
+      ALTER TABLE remote_routes ADD COLUMN retired_at INTEGER;ALTER TABLE remote_routes ADD COLUMN retired_reason TEXT;ALTER TABLE remote_routes ADD COLUMN successor TEXT;
+      CREATE TABLE lifecycle_outbox(id INTEGER PRIMARY KEY AUTOINCREMENT,authority TEXT NOT NULL,session_id TEXT NOT NULL,event TEXT NOT NULL,reason TEXT NOT NULL DEFAULT '',successor TEXT NOT NULL DEFAULT '',at INTEGER NOT NULL,payload TEXT NOT NULL,state TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL,last_attempt INTEGER);
+      CREATE UNIQUE INDEX lifecycle_outbox_dedupe ON lifecycle_outbox(authority,session_id,event,reason,at);`]); this.now = now; this.leaderMs = leaderMs;
     transaction(this.db, () => {
       this.db.prepare("INSERT OR IGNORE INTO meta VALUES('authority',?)").run(id());
       this.db.prepare("INSERT OR IGNORE INTO meta VALUES('paused','false')").run();
@@ -130,6 +138,11 @@ export class Store {
       this.fence(claim, 'session ended');
       this.emit('claim.session_ended', {claim: claim.id, session: sessionId});
     }
+    // Linked hosts fence this session's remote actors too. endSession already
+    // enqueued 'closed' through applyRetirement for a live session; the dedupe
+    // index collapses this repeat within the same millisecond, and a session
+    // retired earlier (or expired) still reaches linked hosts here.
+    enqueueLifecycle(this.db, this.now(), sessionId, 'retired', { reason: 'closed' });
   }
   addPeer(actor, body) {
     requireThat(actor.role === 'admin', 'FORBIDDEN', 'Administrator required', 403);
@@ -158,11 +171,23 @@ export class Store {
       requireThat(!old||['id','instance','plugin','asset','enforcement'].every(k=>old[k]===binding[k]),'RESOURCE_CONFLICT','Resource binding changed');
       // A name used before starts above every generation it issued, so an old holder stays fenced.
       this.db.prepare("INSERT OR IGNORE INTO resources(id,generation) VALUES(?,coalesce((SELECT CAST(value AS INTEGER) FROM meta WHERE key='generation_floor'),0))").run(binding.id);
-      this.db.prepare('INSERT OR IGNORE INTO resource_bindings(id,instance,plugin,asset,enforcement) VALUES(?,?,?,?,?)').run(binding.id,binding.instance,binding.plugin,binding.asset,binding.enforcement);
-      this.db.prepare('UPDATE resource_bindings SET max_ownership_ms=?,allow_indefinite=? WHERE id=?').run(binding.maxOwnershipMs??null,binding.allowIndefinite?1:0,binding.id);
+      this.db.prepare('INSERT OR IGNORE INTO resource_bindings(id,instance,plugin,asset,enforcement,registered_at) VALUES(?,?,?,?,?,?)').run(binding.id,binding.instance,binding.plugin,binding.asset,binding.enforcement,this.now());
+      this.db.prepare('UPDATE resource_bindings SET max_ownership_ms=?,allow_indefinite=?,orphan_grace_ms=?,age_out_ms=? WHERE id=?').run(binding.maxOwnershipMs??null,binding.allowIndefinite?1:0,binding.orphanGraceMs??null,binding.ageOutMs??null,binding.id);
       if(body.pool)this.db.prepare('INSERT OR IGNORE INTO resource_pools VALUES(?,?)').run(binding.id,body.pool);
       this.emit('resource.registered',binding);return binding;
     });
+  }
+  // A cooperative resource nobody has held or queued on since ageOutMs is
+  // removed by the periodic pass; managed and process resources are never
+  // aged out, and registered_at floors the measurement at the upgrade.
+  ageOutCooperative(){
+    for(const b of this.db.prepare("SELECT id,age_out_ms,registered_at FROM resource_bindings WHERE plugin='cooperative'").all()){
+      const ageOut=b.age_out_ms??cooperativeAgeOutDefaultMs;
+      if(ageOut<=0)continue;
+      const last=this.db.prepare("SELECT max(created_at) at FROM tasks WHERE resource=?").get(b.id).at??0;
+      if(Math.max(b.registered_at??0,last)+ageOut>this.now())continue;
+      if(this.removeResource(b.id))this.emit('resource.aged_out',{id:b.id});
+    }
   }
   // Forget a withdrawn or retired resource once nothing holds, awaits or depends on it.
   removeResource(resource){
@@ -390,6 +415,17 @@ export class Store {
         this.fence(claim, 'lease expired');
         this.emit('claim.expired', { claim: claim.id, generation: claim.generation });
       }
+      // An orphaned hold releases once its grace passes. Everything after the
+      // fence is the ordinary path: managed resources wait for the provider's
+      // confirmed stop, an unconfirmed release stays held, and the queue
+      // advances on confirmation.
+      for (const claim of this.db.prepare(`SELECT c.* FROM claims c JOIN reservations r ON r.task_id=c.task_id
+        LEFT JOIN resource_bindings b ON b.id=c.resource
+        WHERE c.state IN ('preparing','running') AND r.orphaned_at IS NOT NULL
+        AND r.orphaned_at+COALESCE(b.orphan_grace_ms,?)<=?`).all(orphanGraceDefaultMs, this.now())) {
+        this.fence(claim, 'holder retired');
+        this.emit('claim.orphan_expired', { claim: claim.id, generation: claim.generation, resource: claim.resource });
+      }
     });
   }
   nextDeadline(){
@@ -461,7 +497,7 @@ export class Store {
       :this.db.prepare('SELECT * FROM sessions ORDER BY created_at').all();
     return {authority:this.authority,epoch:this.epoch,observedAt:this.now(),paused:this.db.prepare("SELECT value FROM meta WHERE key='paused'").get().value==='true',
       tasks,claims,sessions,resource:{id:'artifact',capacity:1,enforcement:'enforced-at-artifact-API',holders:held.get('artifact')??[]},
-      resources:this.db.prepare('SELECT r.id,b.plugin,b.asset,b.enforcement FROM resources r LEFT JOIN resource_bindings b ON b.id=r.id ORDER BY r.id').all().map(r=>({...r,capacity:1,holders:held.get(r.id)??[]})),events,
+      resources:this.db.prepare('SELECT r.id,b.plugin,b.asset,b.enforcement,b.orphan_grace_ms,b.age_out_ms FROM resources r LEFT JOIN resource_bindings b ON b.id=r.id ORDER BY r.id').all().map(r=>({...r,capacity:1,holders:held.get(r.id)??[]})),events,
       cursor:events.at(-1)?.seq??after,hasMore:events.length===500,...(paged?{moreTasks,...(moreTasks?{nextBefore}:{})}:{}),...(active?{active:true}:{})};
   }
 }

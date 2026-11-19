@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // State/fingerprint/settle semantics adapted from Tessera Steward and AgentDesk.
 import { hash, id, integer, requireThat, text, token } from "./common.mjs";
-import { applyRetirement, lifecycleFor, parseLifecycle, lifecycleDefaults } from "./lifecycle.mjs";
+import { applyRetirement, enqueueLifecycle, lifecycleFor, parseLifecycle, lifecycleDefaults } from "./lifecycle.mjs";
 
 export const awarenessSchema = `
 CREATE TABLE remote_routes(actor TEXT PRIMARY KEY REFERENCES actors(id),authority TEXT NOT NULL,session_id TEXT NOT NULL);
@@ -93,13 +93,25 @@ export class SessionAwareness {
   revive(subject) {
     const session = this.db.prepare("SELECT closed_at FROM sessions WHERE id=?").get(subject);
     if (session && session.closed_at !== null) return;
-    let changed = this.db
+    const sessionChanged = this.db
       .prepare("UPDATE sessions SET retired_at=NULL,retired_reason=NULL WHERE id=? AND retired_at IS NOT NULL")
       .run(subject).changes;
-    changed += this.db
+    const changed = sessionChanged + this.db
       .prepare("UPDATE session_views SET retired_at=NULL,retired_reason=NULL WHERE id=? AND retired_at IS NOT NULL")
       .run(subject).changes;
-    if (changed) this.store.emit("session.revived", { session: subject });
+    if (changed) {
+      // Revival within grace reclaims the same claims and generations; nothing
+      // transfers to a successor, which has to reserve again.
+      for (const r of this.db
+        .prepare(`SELECT r.id reservation, c.id claim FROM reservations r JOIN claims c ON c.task_id=r.task_id
+          WHERE c.actor=? AND c.state IN ('preparing','running') AND r.orphaned_at IS NOT NULL`)
+        .all(subject)) {
+        this.db.prepare("UPDATE reservations SET orphaned_at=NULL,orphan_reason=NULL WHERE id=?").run(r.reservation);
+        this.store.emit("reservation.reclaimed", { reservation: r.reservation, claim: r.claim, actor: subject });
+      }
+      if (sessionChanged) enqueueLifecycle(this.db, this.store.now(), subject, "revived");
+      this.store.emit("session.revived", { session: subject });
+    }
   }
   retireRow(id, options) {
     return applyRetirement(this.db, (kind, data) => this.store.emit(kind, data), this.store.now(), id, options);
