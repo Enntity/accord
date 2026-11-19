@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Orphaned reservations (migration 20): a session retired with `tile-closed`,
+  `process-exited`, `superseded` or `operator` orphans the reservations it holds
+  in `preparing`/`running`. Each reports `orphaned {since, reason, releaseAt}`
+  and releases after the resource's `orphanGraceMs` (0–24 h, default 15 min);
+  the ordinary fence then applies — managed holds wait for provider-confirmed
+  stop and an unconfirmed release stays held. Revival inside the grace reclaims
+  the same claim and generation; a successor inherits nothing, hears the orphan
+  and the end, and must reserve again, as does each `lifecycle.notify` address.
+  Retirements and revivals also propagate over host links through a durable
+  `lifecycle` notice: the resource host applies the same orphan/stale/fence
+  rules to the session's remote actor, with the grace counted from receipt.
+- Window reservations warn the holder once per deadline before expiry, at a
+  lead of 10% of the window clamped between one and fifteen minutes; extending
+  re-arms the warning and retired or closed holders are never warned.
+- `cooperative` manifests may declare `ageOutMs` (0 = never, default 30 days):
+  an idle cooperative resource leaves the catalog after that period, measured
+  from its `registered_at`, with `resource.aged_out` recorded.
+
 - Session retirement (migration 19): sessions and observations gain `retired_at`,
   `retired_reason` and `successor`, and public records gain a `lifecycle` field
   (`live`/`idle`/`stale`/`exited`/`retired`) alongside the unchanged `presence`.

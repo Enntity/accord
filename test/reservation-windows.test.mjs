@@ -22,7 +22,7 @@ test('v15 upgrade preserves an existing heartbeat deadline, generation and comma
   c.close();old.close();
   const v15=new DatabaseSync(file);
   for(const [,name] of querySchema.matchAll(/CREATE INDEX (\w+)/g))v15.exec(`DROP INDEX ${name}`);
-  v15.exec('ALTER TABLE session_views DROP COLUMN given_title; ALTER TABLE session_views DROP COLUMN titled_by; ALTER TABLE session_views DROP COLUMN titled_at; ALTER TABLE reservations DROP COLUMN duration_ms; ALTER TABLE sessions DROP COLUMN retired_at; ALTER TABLE sessions DROP COLUMN retired_reason; ALTER TABLE sessions DROP COLUMN successor; ALTER TABLE session_views DROP COLUMN retired_at; ALTER TABLE session_views DROP COLUMN retired_reason; ALTER TABLE session_views DROP COLUMN successor; DELETE FROM migrations WHERE version>=16');
+  v15.exec('ALTER TABLE session_views DROP COLUMN given_title; ALTER TABLE session_views DROP COLUMN titled_by; ALTER TABLE session_views DROP COLUMN titled_at; ALTER TABLE reservations DROP COLUMN duration_ms; ALTER TABLE sessions DROP COLUMN retired_at; ALTER TABLE sessions DROP COLUMN retired_reason; ALTER TABLE sessions DROP COLUMN successor; ALTER TABLE session_views DROP COLUMN retired_at; ALTER TABLE session_views DROP COLUMN retired_reason; ALTER TABLE session_views DROP COLUMN successor; ALTER TABLE reservations DROP COLUMN orphaned_at; ALTER TABLE reservations DROP COLUMN orphan_reason; ALTER TABLE reservations DROP COLUMN warned_deadline; ALTER TABLE resource_bindings DROP COLUMN orphan_grace_ms; ALTER TABLE resource_bindings DROP COLUMN age_out_ms; ALTER TABLE resource_bindings DROP COLUMN registered_at; ALTER TABLE remote_routes DROP COLUMN retired_at; ALTER TABLE remote_routes DROP COLUMN retired_reason; ALTER TABLE remote_routes DROP COLUMN successor; DROP TABLE lifecycle_outbox; DELETE FROM migrations WHERE version>=16');
   const checksums=v15.prepare('SELECT * FROM migrations').all();v15.close();
   const upgraded=new Store(file,{now:()=>0});
   t.after(()=>{upgraded.close();rmSync(dir,{recursive:true,force:true});});
@@ -205,10 +205,10 @@ test('a holder that did not release is told when its window ends, and a released
   await h.client('admin').registerResource({schema:1,id:'canary',asset:'fixture:canary',plugin:'cooperative'});
   const a=h.client('agent-a');await a.announce({label:'holder',activity:'testing'});
   const kept=await a.reserve('canary',{durationMs:1500});
-  const notice=await eventually(async()=>(await a.inbox()).messages.find(m=>m.text.includes(kept.id)));
+  const notice=await eventually(async()=>(await a.inbox()).messages.find(m=>m.text.includes(kept.id)&&m.text.includes('reached its deadline')));
   assert.match(notice.text,/reached its deadline and ended\./);assert.doesNotMatch(notice.text,/failed/);
   const released=await a.reserve('canary',{durationMs:60000});
   await eventually(async()=>(await a.reservation(released.id)).state==='running');
   await a.release(released.id);await eventually(async()=>(await a.reservation(released.id)).state==='released');
-  await delay(1500);assert(!(await a.inbox()).messages.some(m=>m.text.includes(released.id)));
+  await delay(1500);assert(!(await a.inbox()).messages.some(m=>m.text.includes(released.id)&&m.text.includes('reached its deadline')));
 });
