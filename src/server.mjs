@@ -46,6 +46,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
   }
   managers.onRunning=row=>{try{collaboration.granted(overseer.actor,{key:`grant:${row.id}`,reservation:row.id,actor:row.actor,resource:row.resource,queuedAt:row.created_at});}catch{/* A notice is a hint. */}};
   const observationRuntime=awarenessRuntime(dirname(db),awareness);
+  awareness.lifecycleConfig=()=>observationRuntime.lifecycle();
   const secretFor = claim => createHmac('sha256', claimSecret).update(claim.id).digest('base64url');
   const sessionSecret = sessionId => createHmac('sha256', claimSecret).update(`session:${sessionId}`).digest('base64url');
   const instanceFor=resource=>resource==='artifact'?driverInstance:store.binding(resource)?.instance;
@@ -141,6 +142,15 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
   async function prune(){
     if(closed||unhealthy||pruning)return;pruning=true;
     try{awareness.expireStale();}catch{/* The next pass retries. */}
+    try{
+      const config=observationRuntime.lifecycle(),result=awareness.retirePass(config);
+      // One notice per stale-holder episode per configured address; the send key
+      // carries the claim generation so a crash between marking and sending is safe.
+      for(const holder of result.stale)for(const to of config.notify??[])try{
+        collaboration.send(overseer.actor,{key:`lifecycle.stale:${holder.claim}:${holder.generation}:${to}`,to,kind:'notification',
+          text:`Accord lifecycle: session ${holder.session} is silent but still holds ${holder.resource} (claim ${holder.claim}, generation ${holder.generation}, deadline ${holder.deadline}). It is stale, not retired. Reserve only if needed.`});
+      }catch{/* A notice is a hint. */}
+    }catch{/* The next pass retries. */}
     try{
       const managed=store.db.prepare("SELECT id FROM resource_bindings WHERE plugin='managed-http'").all().map(r=>r.id);
       const installed=(await request(driverUrl,driverToken,'/control/resources')).resources.filter(r=>r.plugin==='managed-http').map(r=>r.id);
@@ -238,6 +248,8 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     if(operation==='manager-schedules'){requireThat(actor.role==='admin','FORBIDDEN','Operator required',403);return managers.schedules();}
     if(operation==='summary-configure')return observationRuntime.configureSummary(actor,args);
     if(operation==='session-bind')return awareness.bind(actor,args);
+    if(operation==='lifecycle-retire')return awareness.retire(actor,args);
+    if(operation==='lifecycle-sweep')return awareness.sweep(actor,args);
     if(['context-inbox','context-wait'].includes(operation)) {
       requireThat(actor.role==='admin','FORBIDDEN','Trusted local hook required',403);attention.key(args);
       if(operation==='context-wait')return attention.wake(args,signal);
@@ -265,7 +277,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     if(operation==='overseer-signal')return overseer.signal(actor,args);
     if(operation==='announce'){const result=collaboration.announce(actor,args);awareness.announce(actor,args);return result;}
     if(operation==='find'){
-      const [result,local]=await Promise.all([collaboration.find(args.query??'',true,collaboration.address(actor)),catalog()]);
+      const [result,local]=await Promise.all([collaboration.find(args.query??'',true,collaboration.address(actor),{includeRetired:args.includeRetired===true}),catalog()]);
       result.hosts[0].resources=local.resources;
       return args.detail===true?result:compactFind(result,args.query??'');
     }
