@@ -16,7 +16,6 @@ import { enrollProfile, bindNativeSession } from "../src/bootstrap.mjs";
 let serial = 0;
 function fixture(t) {
   const dir = mkdtempSync(join(tmpdir(), "accord-agent-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
   const file = join(dir, "coordinator.sqlite");
   let now = 1_000_000;
   const s = new Store(file, { now: () => now, leaderMs: 30000 });
@@ -27,7 +26,9 @@ function fixture(t) {
   const admin = { id: "admin", role: "admin" }, a = { id: "a", role: "worker" }, b = { id: "b", role: "worker" };
   const v = new SessionAwareness(s);
   const c = new Collaboration(s, file);
-  t.after(() => { c.close(); s.close(); });
+  // One hook, close before rm: separate hooks run in registration order, so an
+  // rm registered first would fire while SQLite still holds the directory.
+  t.after(() => { c.close(); s.close(); rmSync(dir, { recursive: true, force: true }); });
   const enroll = (label = "Fixture agent") =>
     s.openSession({ id: "a" }, { key: `enroll:${++serial}`, label, harness: "codex" }, () => `${serial}-secret`).sessionId;
   return { s, v, c, admin, a, b, enroll, file, addr: (id) => `${s.authority}/${id}` };
@@ -164,7 +165,6 @@ test("compact participant shows title, client, tile and task", (t) => {
 
 test("an upgrade copies given titles into the peer layer and keeps givenTitle", (t) => {
   const dir = mkdtempSync(join(tmpdir(), "accord-agent-upg-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
   const file = join(dir, "coordinator.sqlite");
   const seed = new Store(file);
   seed.db.prepare("INSERT INTO actors VALUES('v1',?,'worker')").run("x");
@@ -175,7 +175,7 @@ test("an upgrade copies given titles into the peer layer and keeps givenTitle", 
   old.exec("ALTER TABLE sessions DROP COLUMN client; DROP TABLE agent_tiles; DROP TABLE titles; DELETE FROM migrations WHERE version>=22");
   old.close();
   const s = new Store(file);
-  t.after(() => s.close());
+  t.after(() => { s.close(); rmSync(dir, { recursive: true, force: true }); });
   const layer = { ...s.db.prepare("SELECT layer,title,by,at FROM titles WHERE subject='v1'").get() };
   assert.deepEqual(layer, { layer: "peer", title: "Old peer name", by: "admin", at: 7 });
   const aw = new SessionAwareness(s);
