@@ -251,3 +251,35 @@ double-send.
 `schedule-cancel {id}` ends an owned or admin schedule. All three are
 forwardable, so agents on linked hosts schedule on the resource's own
 authority.
+
+## The agent record (migration 22)
+
+Participants in `find`/`sessions` carry an `agent` object: `{host:{authority,
+name}, client, tile?, title, titleSource, titles?, task?, previous?, native?}`.
+`client` is the name recorded at enrollment (`accord session open` passes `cli`,
+the MCP bridge passes the client's `clientInfo.name`, `accord run` the command
+basename). `tile` is a non-exclusive `agent_tiles` link `{id,role}` — `agent`
+for the tile's own bridge, `nested` for sessions opened inside it; a legacy
+`tessera` mailbox binding reads as an `agent` link. `native` is the mailbox
+binding, `task` the latest working/waiting job title (else the announced
+activity), and `previous` up to five earlier session addresses walked backwards
+through the supersession chain.
+
+Titles are layered. `title` writes the caller's layer: an admin writes
+`operator`, the host's designated overseer writes `overseer`, anyone else
+writes `peer`; an empty title clears only the caller's layer. The effective
+`title` is operator, else overseer, else the agent's own non-default label,
+else peer, else the observed title; `titleSource` says which. `givenTitle`
+still reports the highest non-own layer for older clients. `session.titled`
+carries the layer. `overseer-designate {address|null}` (admin) names the
+host's overseer; the current designation appears in the `overseer` answer.
+
+Native mailbox bindings are created only from an explicit trusted identity —
+the MCP client's own ID or `accord session open --native SOURCE:ID`. CLI
+enrollment never binds environment IDs (an inherited parent ID is ignored);
+when `TESSERA_TILE_ID` is present it records a `nested` tile link through the
+admin-only `session-link-tile {actor, tile, role}` operation.
+
+`find {local:true}` returns only this host's entry: no forwarding to linked
+hosts, even for admin. Adapters polling every few seconds for local tiles
+should pass it.

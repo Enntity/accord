@@ -173,3 +173,18 @@ test('the same MCP adapter can retry enrollment after a temporary host outage',{
   assert.equal((await adapter.call('accord_host')).authority,(await h.client('admin').host()).authority);
   assert.equal((await h.client('admin').board()).events.filter(e=>e.kind==='session.opened').length,1);
 });
+
+test('MCP accord_report forwards detail: changed detail bumps revision and progressAt',async t=>{
+  const b=await bridge(t);
+  const get=id=>{const result=b.replies.get(id).result;assert(!result.isError,JSON.stringify(result));return JSON.parse(result.content[0].text);};
+  b.call(10,'accord_report',{key:'r1',title:'Quiet work',state:'working',detail:'first detail'});
+  await eventually(()=>b.replies.has(10));
+  const r1=get(10);
+  b.call(11,'accord_report',{key:'r2',title:'Quiet work',state:'working',detail:'a different detail'});
+  await eventually(()=>b.replies.has(11));
+  const r2=get(11);
+  assert.equal(r2.id,r1.id);
+  assert.equal(r2.revision,r1.revision+1);
+  assert(r2.progressAt>r1.progressAt);
+  assert.equal(r2.detail,'a different detail');
+});

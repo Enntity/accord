@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- Agent record (migration 22): `agent_tiles` non-exclusive tile links
+  (`session-link-tile`, admin-only), `titles` with operator/overseer/peer layers
+  (existing `given_title` copied to the peer layer), and `sessions.client`.
+  Participants now expose an `agent` record (client, tile link, layered title,
+  task, previous addresses, mailbox binding). `overseer-designate` names the
+  host overseer; `session-title` writes the caller's layer. `find` accepts
+  `{local:true}` to skip forwarding to linked hosts.
+- Fixed: CLI enrollment (`session open`, `accord run`) no longer binds
+  inherited environment IDs to the mailbox — that could retire the tile's own
+  agent session as `superseded`. Tile IDs are recorded as `nested` links
+  instead; `accord session open --native SOURCE:ID` covers trusted launchers.
+- Fixed: the MCP bridge stripped `detail` from every awareness operation, so
+  `accord_report` never forwarded progress details — same-title reports counted
+  as unchanged and `progressAt` never advanced. It is now stripped only for
+  `accord_sessions`.
+
 - Workload observations on resources: on Linux, host telemetry now also reports
   GPU compute processes and running containers (`workloads`), plus trusted
   provider runtime reports posted through the admin-only `workload-report`
@@ -28,6 +44,19 @@
   MCP gains `accord_schedule` plus `schedules`, `schedule-cancel` and
   `publish` under `accord_more`; the CLI gains `schedule`, `schedules`,
   `unschedule` and `publish`. Owner retirement cancels its schedules.
+- The agent record (migration 22): participants in `find`/`sessions` carry
+  `agent:{host, client, tile?, title, titleSource, titles?, task?, previous?,
+  native?}` — the connecting client name, a non-exclusive `agent_tiles` link
+  (role `agent` for the tile's bridge, `nested` for sessions inside it), a
+  layered display title, the current task and the supersession chain. Titles
+  now have layers: admin writes `operator`, the designated overseer
+  (`overseer-designate`) writes `overseer`, others write `peer`, and each
+  clears only its own; `givenTitle` keeps reporting the highest non-own
+  layer. Mailbox bindings are created only from an explicit trusted identity:
+  CLI enrollment no longer binds inherited `CODEX_THREAD_ID`,
+  `CLAUDE_SESSION_ID` or `TESSERA_TILE_ID` — a tile it runs inside becomes a
+  `nested` link — and `accord session open --native SOURCE:ID` covers trusted
+  launchers.
 
 ## 0.7.0
 

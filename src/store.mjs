@@ -90,7 +90,16 @@ export class Store {
       CREATE INDEX schedules_owner ON schedules(owner,state);
       CREATE TABLE schedule_cursor(id INTEGER PRIMARY KEY CHECK(id=1), event_seq INTEGER NOT NULL);
       INSERT INTO schedule_cursor VALUES(1,(SELECT coalesce(max(seq),0) FROM events));
-      CREATE INDEX events_kind_at ON events(kind,at);`]); this.now = now; this.leaderMs = leaderMs;
+      CREATE INDEX events_kind_at ON events(kind,at);`,
+      // Migration 22: the agent record. agent_tiles links an actor to its tile
+      // (role agent for the tile's own bridge, nested for sessions opened inside
+      // it); titles keeps display names per layer; sessions.client records the
+      // connecting client name.
+      `ALTER TABLE sessions ADD COLUMN client TEXT;
+      CREATE TABLE agent_tiles(actor TEXT PRIMARY KEY REFERENCES actors(id), tile TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN('agent','nested')), linked_at INTEGER NOT NULL);
+      CREATE INDEX agent_tiles_tile ON agent_tiles(tile);
+      CREATE TABLE titles(subject TEXT NOT NULL, layer TEXT NOT NULL CHECK(layer IN('operator','overseer','peer')), title TEXT NOT NULL, by TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY(subject,layer));
+      INSERT INTO titles(subject,layer,title,by,at) SELECT id,'peer',given_title,coalesce(titled_by,''),coalesce(titled_at,0) FROM session_views WHERE given_title IS NOT NULL;`]); this.now = now; this.leaderMs = leaderMs;
     transaction(this.db, () => {
       this.db.prepare("INSERT OR IGNORE INTO meta VALUES('authority',?)").run(id());
       this.db.prepare("INSERT OR IGNORE INTO meta VALUES('paused','false')").run();
@@ -123,11 +132,15 @@ export class Store {
   openSession(enroller, body, secretFor) {
     return this.command({id: `enroll:${enroller.id}`}, body, 'session.open', () => {
       text(body.label, 'label', 120); text(body.harness, 'harness', 80);
+      if(body.client!==undefined){
+        text(body.client, 'client', 40);
+        requireThat(/^[A-Za-z0-9._ -]+$/.test(body.client), 'INVALID_INPUT', 'Invalid client name', 400);
+      }
       const persistent=body.ttlMs===undefined;
       if(!persistent)integer(body.ttlMs, 'ttlMs', 1000, 86400000);
       const sessionId = id(), createdAt = this.now(), expiresAt = persistent ? persistentDeadline : createdAt + body.ttlMs;
       this.provision(sessionId, secretFor(sessionId), 'worker');
-      this.db.prepare('INSERT INTO sessions(id,label,harness,created_at,expires_at,closed_at,persistent) VALUES(?,?,?,?,?,NULL,?)').run(sessionId, body.label, body.harness, createdAt, expiresAt,Number(persistent));
+      this.db.prepare('INSERT INTO sessions(id,label,harness,client,created_at,expires_at,closed_at,persistent) VALUES(?,?,?,?,?,?,NULL,?)').run(sessionId, body.label, body.harness, body.client ?? null, createdAt, expiresAt,Number(persistent));
       this.emit('session.opened', {session: sessionId, label: body.label, harness: body.harness, expiresAt:persistent?null:expiresAt,persistent});
       return {sessionId, expiresAt:persistent?null:expiresAt, persistent, authority: this.authority};
     });

@@ -41,7 +41,7 @@ export class Collaboration {
     requireThat(typeof query==='string'&&query.length<=200,'INVALID_INPUT','Search must be <=200 characters',400);
     const found=[];
     const needle=query.toLowerCase();
-    const sql=`SELECT p.*,s.harness,s.expires_at,s.closed_at,v.source,v.external_id,v.private,v.state observed_state,v.progress_at,b.actor binding_actor FROM participants p
+    const sql=`SELECT p.*,s.harness,s.client,s.expires_at,s.closed_at,v.source,v.external_id,v.private,v.state observed_state,v.progress_at,b.actor binding_actor FROM participants p
       LEFT JOIN sessions s ON s.id=p.actor LEFT JOIN session_views v ON v.id=p.actor
       LEFT JOIN session_bindings b ON b.source=v.source AND b.external_id=v.external_id AND v.private=0
       WHERE NOT EXISTS (SELECT 1 FROM remote_routes r WHERE r.actor=p.actor)
@@ -61,6 +61,7 @@ export class Collaboration {
       const binding=observed&&!p.private&&p.binding_actor?{actor:p.binding_actor}:null;
       const value={kind:observed?'observation':p.harness?'participant':'service',source:p.source??'agent',state:p.observed_state??'unknown',
         ...(observed?{externalId:p.private?null:p.external_id}:{}),...(binding?{participantAddress:this.store.authority+'/'+binding.actor}:{}),address:`${this.store.authority}/${p.actor}`,label:p.label,capabilities:JSON.parse(p.capabilities),activity:p.activity,location:p.location,harness:p.harness??'service',lastSeen,
+        ...(observed?{}:{agent:this.agentRecord?.(p.actor)}),
         presence:ended?'offline':native&&p.observed_state==='unknown'||this.store.now()-lastSeen>120000?'unknown':'recent'};
       if(JSON.stringify(value).toLowerCase().includes(needle))found.push(value);
       if(found.length===200)break;

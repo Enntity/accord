@@ -60,12 +60,12 @@ const moreTool={name:'accord_more',description:'Call a less common Accord tool. 
 const published=({name,description,inputSchema:{properties,required}})=>({name,description,inputSchema:{type:'object',properties,...(required?.length?{required}:{})}});
 export const listedTools=()=>[...toolCatalog.filter(t=>dailyTools.has(t.name)),moreTool].map(published);
 function cleanClaim(claim) { const {resourceToken,driverUrl,...publicClaim}=claim;return publicClaim; }
-export function mcpAdapter(profile,{identity=nativeSessionIdentity()}={}) {
+export function mcpAdapter(profile,{identity=nativeSessionIdentity(),clientName}={}) {
   let clientPromise;
   const enrollmentKey = identity?nativeEnrollmentKey(identity):randomUUID(), inherited = Boolean(process.env.ACCORD_SESSION_FILE);
   const client = () => {
     if (!clientPromise) {
-      clientPromise = Promise.resolve().then(() => inherited ? inheritedClient() : enrollProfile(profile,{label:'MCP agent',harness:'mcp',key:enrollmentKey,nativeIdentity:identity}));
+      clientPromise = Promise.resolve().then(() => inherited ? inheritedClient() : enrollProfile(profile,{label:'MCP agent',harness:'mcp',client:clientName,key:enrollmentKey,nativeIdentity:identity}));
       // A transient enrollment failure must not poison this bridge forever.
       // Keep the enrollment key so a lost response cannot create a second session.
       clientPromise.catch(() => { clientPromise = undefined; });
@@ -93,6 +93,9 @@ export function mcpAdapter(profile,{identity=nativeSessionIdentity()}={}) {
       if(name==='accord_recall_read'){const {host,...body}=args;return c.collaborate('memory-read',body,host);}
       if(awarenessOps[name]){
         const {host,detail,...body}=args;
+        // `detail` is a view flag only for accord_sessions; for every other op it is
+        // real payload (e.g. accord_report's progress detail) and must pass through.
+        if(name!=='accord_sessions')body.detail=detail;
         if(name==='accord_session_read')body.limit??=10;
         const result=await c.collaborate(awarenessOps[name],{...body,key:args.key??randomUUID()},host);
         return name==='accord_sessions'&&!detail?compact.sessions(result):result;
@@ -158,7 +161,7 @@ export async function serveMcp(profile,input=process.stdin,output=process.stdout
   input.setEncoding?.('utf8');
   const nativeAdapters=new Map();let buffer='',initialized=false,clientName,adapter;
   // Made after initialize, so the environment ID it trusts is the connecting client's own.
-  const defaultAdapter=()=>adapter??=mcpAdapter(profile,{identity:nativeSessionIdentity(process.env,clientName??'')??null});
+  const defaultAdapter=()=>adapter??=mcpAdapter(profile,{identity:nativeSessionIdentity(process.env,clientName??'')??null,clientName});
   // Native transport metadata is supplied by the client, never by model arguments.
   // A pooled transport may carry multiple conversations: isolate their clients.
   const adapterFor=message=>{
@@ -172,7 +175,7 @@ export async function serveMcp(profile,input=process.stdin,output=process.stdout
     const key=nativeEnrollmentKey(identity);
     if(!nativeAdapters.has(key)){
       requireThat(nativeAdapters.size<256,'MCP_LIMIT','Too many native sessions on this bridge',400);
-      nativeAdapters.set(key,mcpAdapter(profile,{identity}));
+      nativeAdapters.set(key,mcpAdapter(profile,{identity,clientName}));
     }
     return nativeAdapters.get(key);
   };

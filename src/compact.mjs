@@ -5,7 +5,11 @@ const clip=(s,n)=>typeof s==='string'&&s.length>n?s.slice(0,n-1)+'…':s;
 const clean=o=>Object.fromEntries(Object.entries(o).filter(([,v])=>v!==undefined&&v!==null&&v!==''&&!(Array.isArray(v)&&!v.length)));
 const rank={recent:0,unknown:1,offline:2};
 export const participant=p=>clean({address:p.address,label:clip(p.label,60),activity:clip(p.activity,120),state:p.state==='working'?undefined:p.state,
-  presence:p.presence==='recent'?undefined:p.presence,location:clip(p.location,80),capabilities:p.capabilities?.slice(0,5).map(c=>clip(c,40))});
+  presence:p.presence==='recent'?undefined:p.presence,location:clip(p.location,80),capabilities:p.capabilities?.slice(0,5).map(c=>clip(c,40)),
+  title:p.agent?.title&&p.agent.title!==p.label?clip(p.agent.title,60):undefined,
+  client:p.agent?.client,
+  tile:p.agent?.tile?p.agent.tile.id.slice(0,8)+(p.agent.tile.role==='nested'?'·nested':''):undefined,
+  task:clip(p.agent?.task,80)});
 const holder=h=>h&&clean({label:clip(h.label,60),address:h.address,deadline:h.deadline,state:h.state==='running'?undefined:h.state});
 const zDate=ms=>new Date(ms).toISOString().slice(0,16).replace('T',' ')+'Z';
 export function workloadLines(workloads){
