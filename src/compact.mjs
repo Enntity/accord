@@ -7,10 +7,24 @@ const rank={recent:0,unknown:1,offline:2};
 export const participant=p=>clean({address:p.address,label:clip(p.label,60),activity:clip(p.activity,120),state:p.state==='working'?undefined:p.state,
   presence:p.presence==='recent'?undefined:p.presence,location:clip(p.location,80),capabilities:p.capabilities?.slice(0,5).map(c=>clip(c,40))});
 const holder=h=>h&&clean({label:clip(h.label,60),address:h.address,deadline:h.deadline,state:h.state==='running'?undefined:h.state});
+const zDate=ms=>new Date(ms).toISOString().slice(0,16).replace('T',' ')+'Z';
+export function workloadLines(workloads){
+  const items=workloads?.items??[],lines=items.map(item=>{
+    const parts=[item.name,item.kind];
+    if(Number.isFinite(item.gpuMemoryMiB))parts.push(`${(item.gpuMemoryMiB/1024).toFixed(1)} GiB GPU`);
+    if(item.kind==='runtime'&&item.state&&item.state!=='running')parts.push(`${item.state}${item.since?` since ${zDate(item.since)}`:''}${item.by?` by ${item.by}`:''}`);
+    else if(item.runtime&&item.state)parts.push(item.state);
+    if(item.owner)parts.push(`owner ${item.owner}`);
+    else if(item.ownerSource==='unknown'||!item.ownerSource)parts.push('owner unknown');
+    return parts.join(' · ');
+  });
+  const shown=lines.slice(0,8);if(lines.length>8)shown.push(`+${lines.length-8} more`);
+  return shown;
+}
 // The legacy artifact slot and idle pool slots only add noise; pools are summarised once.
 export function resources(list=[],pools){
   const shown=list.filter(r=>r.holder||r.state!=='unclaimed'||(r.plugin!=='artifact'&&r.localId!=='artifact'&&!r.pool));
-  const entries=shown.map(r=>clean({id:r.id,pool:r.pool,state:r.state,plugin:r.plugin,enforcement:clip(r.enforcement,160),hosts:r.hosts,queued:(r.queued??r.queue?.length)||undefined,holder:holder(r.holder)}));
+  const entries=shown.map(r=>clean({id:r.id,pool:r.pool,state:r.state,plugin:r.plugin,enforcement:clip(r.enforcement,160),hosts:r.hosts,queued:(r.queued??r.queue?.length)||undefined,holder:holder(r.holder),workloads:r.workloads?workloadLines(r.workloads):undefined}));
   // Group once; a fleet can have a distinct pool on every host.
   const groups=new Map();
   if(!pools)for(const r of list)if(r.pool){
@@ -45,7 +59,7 @@ export function find(result,query=''){
   bound(view,8192,[['participants','moreParticipants'],['resources','moreResources'],['pools','moreResources'],['hosts','moreHosts']]);
   return view;
 }
-export const reservation=r=>clean(r);
+export const reservation=r=>clean({...r,workloads:r.workloads?workloadLines(r.workloads):undefined});
 
 // Mutates only the supplied presentation arrays. Complete records remain in storage.
 export function bound(view,maxBytes,fields){

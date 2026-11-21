@@ -96,7 +96,7 @@ The coordinator separately holds the driver's control credential. Control routes
 | Route | Contract |
 | --- | --- |
 | GET `/control/status` | Driver instance, bound authority, highest epoch/generation, active claim |
-| POST `/control/activate` | `{instance,authority,epoch,generation,claimId,credentialHash}` |
+| POST `/control/activate` | `{instance,authority,epoch,generation,claimId,credentialHash,holder?}` |
 | POST `/control/revoke` | `{instance,authority,epoch,generation,claimId}` |
 | GET `/control/receipts/{id}` | Receipt metadata for acceptance validation |
 | GET `/control/artifacts/{id}` | Stored artifact content |
@@ -195,3 +195,22 @@ from now, including conversion of a live heartbeat lease. It never shortens a
 previous deadline; same-key retries never move it again. Ownership limits,
 owner authentication, session revocation and confirmed recovery still apply.
 Compatibility resource managers reject windows with `WINDOW_UNSUPPORTED`.
+
+## Workload observations (0.7.x)
+
+A host administrator posts `workload-report` to `/v1/collaboration` with
+`{key,source,ttlMs?,items}`; each report replaces the source's previous report
+and lives in memory until `ttlMs` (10 s–1 h, default 3 min) — nothing is
+persisted, so senders re-report periodically. Items are bounded (`id` ≤120,
+`state` ∈ running/starting/stopping/stopped/suspended/failed/unknown, plus
+optional `node`, `container`, `model`, `since`, `by`, `operationId`, `note`).
+Reports surface under `workloads.reports` in host telemetry.
+
+Local `resources` and `reservation` answers gain a `workloads` object on each
+resource with a non-empty `hosts` list: `{observedAt, note:'Observed on the
+host; not ownership', hosts, items}`. These are observations only — they grant
+no ownership and never gate admission. See `docs/telemetry.md` for collection,
+host-name resolution and the owner-label precedence.
+
+Managed `prepare` bodies now include `holder:{label,address}` of the claim's
+actor. Providers may ignore unknown fields; LLooM does.

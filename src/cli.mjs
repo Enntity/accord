@@ -215,7 +215,7 @@ try {
     const config = configuration(directory);
     const service = coordinator({ db: join(directory, 'coordinator.sqlite'), claimSecret: config.readToken('claim-secret'),
       driverUrl: option('driver-url', 'http://127.0.0.1:8788'), driverToken: config.readToken('driver-control'), driverInstance: config.driverInstance,
-      leaderMs: Number(option('leader-ms', 5000)), hostName:option('name',hostname()) });
+      leaderMs: Number(option('leader-ms', 5000)), hostName:option('name',hostname()), linksDir:process.env.ACCORD_LINKS_DIR });
     const url = await listen(service.server, Number(option('port', 0))), local = await listenLocal(service.server, directory);
     writeFileSync(join(directory,'endpoints.json'),JSON.stringify({coordinator:url,authority,...(local?{local:local.url}:{})}),{mode:0o600});
     ready({ url, authority, local: local?.url });

@@ -18,8 +18,8 @@ export async function eventually(fn, timeout = 8000) {
   }
   throw Error(`Condition timed out${last ? ': '+last.message : ''}`);
 }
-export function launch(file, args = []) {
-  const proc = fork(fileURLToPath(file), args, { stdio: ['ignore','ignore','pipe','ipc'] });
+export function launch(file, args = [], env = null) {
+  const proc = fork(fileURLToPath(file), args, { stdio: ['ignore','ignore','pipe','ipc'], ...(env?{env:{...process.env,...env}}:{}) });
   proc.messages = []; proc.diagnostic = '';
   proc.on('message', message => proc.messages.push(message));
   proc.stderr.on('data', data => { proc.diagnostic = (proc.diagnostic + data.toString()).slice(-4000); });
@@ -49,7 +49,7 @@ export async function stop(proc, signal = 'SIGTERM') {
   });
 }
 // Use the production lease on every runner; expiry tests can ask for a short one.
-export async function harness({ leaderMs: requested = 5000, dir = null } = {}) {
+export async function harness({ leaderMs: requested = 5000, dir = null, serverExtra = [], serverEnv = null } = {}) {
   const leaderMs = process.platform === 'win32' ? Math.max(requested, 5000) : requested;
   const data = dir || mkdtempSync(join(tmpdir(), 'accord-test-'));
   initialize(data,{fixtures:true});
@@ -59,11 +59,11 @@ export async function harness({ leaderMs: requested = 5000, dir = null } = {}) {
     const proc = launch(new URL('../src/cli.mjs', import.meta.url), ['driver','--data',data,'--port',String(port)]);
     processes.push(proc); const ready = await message(proc, 'ready'); h.driver = proc; h.driverUrl = ready.url; h.driverInstance = ready.instance; return proc;
   };
-  h.startServer = async (port = 0, driverUrl = h.driverUrl) => {
+  h.startServer = async (port = 0, driverUrl = h.driverUrl, extra = [], env = null) => {
     // Windows ends a process without its shutdown handler, so the old lease has to lapse.
     if (h.server && process.platform === 'win32') await delay(leaderMs + 250);
     const start = async () => {
-      const proc = launch(new URL('../src/cli.mjs', import.meta.url), ['serve','--data',data,'--port',String(port),'--driver-url',driverUrl,'--leader-ms',String(leaderMs)]);
+      const proc = launch(new URL('../src/cli.mjs', import.meta.url), ['serve','--data',data,'--port',String(port),'--driver-url',driverUrl,'--leader-ms',String(leaderMs),...extra],env);
       processes.push(proc); const ready = await message(proc, 'ready'); h.server = proc; h.url = ready.url; return proc;
     };
     // Startup can race a previous process's lease on any runner.
@@ -79,7 +79,7 @@ export async function harness({ leaderMs: requested = 5000, dir = null } = {}) {
   h.client = name => new AccordClient(h.url, credential(name));
   h.active = async claim => eventually(async () => { const value=await h.client(claim.actor).inspect(claim.id); return value.state === 'running' && value; });
   h.close = async (remove = true) => { await Promise.all(processes.map(p => stop(p))); if (remove && !dir) rmSync(data, { recursive: true, force: true }); };
-  try { await h.startDriver(); await h.startServer(); return h; } catch(e) { await h.close(); throw e; }
+  try { await h.startDriver(); await h.startServer(0, h.driverUrl, serverExtra, serverEnv); return h; } catch(e) { await h.close(); throw e; }
 }
 export async function link(a,b){
   const aa=(await a.client('admin').host()).authority,bb=(await b.client('admin').host()).authority,x=token(),y=token();

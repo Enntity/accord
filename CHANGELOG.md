@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- Workload observations on resources: on Linux, host telemetry now also reports
+  GPU compute processes and running containers (`workloads`), plus trusted
+  provider runtime reports posted through the admin-only `workload-report`
+  operation (in-memory, TTL-bounded, each report replacing its source's last).
+  Local `resources`/`reservation` answers — MCP, CLI and HTTP, local or
+  forwarded — attach `workloads` to every resource with a non-empty `hosts`:
+  containers with summed GPU memory, host GPU processes, and report runtimes
+  joined by `node`/`container`, each with an `owner` label where one is known
+  (`reservation` > `lloom` > `declared` `io.enntity.*` labels > `unknown`).
+  Everything is an observation, never ownership. Managed `prepare` bodies now
+  carry `holder:{label,address}`; providers may ignore it.
+
 ## 0.7.0
 
 - Orphaned reservations (migration 20): a session retired with `tile-closed`,
