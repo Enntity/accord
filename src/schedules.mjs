@@ -224,7 +224,9 @@ export class Schedules {
           ?? this.db.prepare('SELECT label FROM sessions WHERE id=?').get(successor)?.label;
         // A rebound session inherits the retired owner's schedules; the owner
         // label stays unless the successor has one of its own.
-        this.db.prepare("UPDATE schedules SET owner=?,owner_label=coalesce(?,owner_label) WHERE owner=? AND state='active'").run(successor, label ?? null, data.session);
+        // Self-targeted check-ins follow the rebound owner; explicit targets stay.
+        this.db.prepare("UPDATE schedules SET owner=?,owner_label=coalesce(?,owner_label),target=CASE WHEN target=? THEN ? ELSE target END WHERE owner=? AND state='active'")
+          .run(successor, label ?? null, `${this.store.authority}/${data.session}`, `${this.store.authority}/${successor}`, data.session);
       } else {
         this.db.prepare("UPDATE schedules SET state='cancelled',ended_reason='owner-retired' WHERE owner=? AND state='active'").run(data.session);
       }

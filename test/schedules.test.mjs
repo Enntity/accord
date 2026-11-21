@@ -374,18 +374,30 @@ test("a rebound successor inherits the retired owner's schedules instead of canc
   const f = fixture(t);
   const watcher = f.enroll("Watcher");
   const sched = f.sc.create(f.a, { key: "inh", to: `${f.s.authority}/${watcher}`, text: "keep watching", everyMs: 60000 });
+  const self = f.sc.create(f.a, { key: "inh-self", text: "check in", everyMs: 60000 });
   // A superseding session records a successor the way enrolment rebound does.
   f.s.db.prepare("UPDATE sessions SET retired_at=?,retired_reason='superseded',successor='a2' WHERE id='a'").run(f.now());
   f.s.emit("session.retired", { session: "a", reason: "superseded", successor: "a2" });
   f.sc.tick();
-  const row = f.s.db.prepare("SELECT owner,state,ended_reason FROM schedules WHERE id=?").get(sched.id);
+  const row = f.s.db.prepare("SELECT owner,target,state,ended_reason FROM schedules WHERE id=?").get(sched.id);
   assert.equal(row.owner, "a2");
+  assert.equal(row.target, `${f.s.authority}/${watcher}`); // explicit target unchanged
   assert.equal(row.state, "active");
   assert.equal(row.ended_reason, null);
-  // It still fires to the original target.
+  // A self-targeted schedule follows the rebound owner.
+  const selfRow = f.s.db.prepare("SELECT owner,target FROM schedules WHERE id=?").get(self.id);
+  assert.equal(selfRow.owner, "a2");
+  assert.equal(selfRow.target, `${f.s.authority}/a2`);
+  // It still fires to the original target; the self-target fires to the successor.
   f.advance(60000);
   f.sc.tick();
   assert.equal(f.s.db.prepare("SELECT fired_count FROM schedules WHERE id=?").get(sched.id).fired_count, 1);
+  assert.equal(f.s.db.prepare("SELECT fired_count FROM schedules WHERE id=?").get(self.id).fired_count, 1);
+  const mails = f.s.db.prepare("SELECT envelope FROM message_outbox").all().map((r) => JSON.parse(r.envelope));
+  assert.ok(mails.some((m) => m.to === `${f.s.authority}/${watcher}`));
+  const selfMail = mails.find((m) => m.to === `${f.s.authority}/a2`);
+  assert.ok(selfMail);
+  assert.equal(selfMail.scheduledBy, `${f.s.authority}/a2`);
 });
 
 test("a schedule on B delivers to a linked host A from B/accord-scheduler with scheduledBy intact", async (t) => {
