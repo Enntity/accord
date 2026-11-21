@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
@@ -9,9 +9,9 @@ import { Store } from "../src/store.mjs";
 import { Collaboration } from "../src/collaboration.mjs";
 import { SessionAwareness } from "../src/session-awareness.mjs";
 import { participant } from "../src/compact.mjs";
-import { harness } from "./helpers.mjs";
+import { harness, link } from "./helpers.mjs";
 import { install } from "../src/installer.mjs";
-import { enrollProfile } from "../src/bootstrap.mjs";
+import { enrollProfile, bindNativeSession } from "../src/bootstrap.mjs";
 
 let serial = 0;
 function fixture(t) {
@@ -185,4 +185,49 @@ test("an upgrade copies given titles into the peer layer and keeps givenTitle", 
   assert.equal(pub.titledAt, 7);
   assert.equal(pub.agent.title, "Old peer name");
   assert.equal(pub.agent.titleSource, "peer");
+});
+
+test("a host without session-link-tile never fails enrollment; a failed bind still reports", async (t) => {
+  const { createServer } = await import("node:http");
+  const dir = mkdtempSync(join(tmpdir(), "accord-agent-old-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  writeFileSync(join(dir, "admin.token"), "admintoken", { mode: 0o600 });
+  const endpointFile = join(dir, "endpoints.json");
+  const server = createServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => {
+      const operation = JSON.parse(body || "{}").operation;
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: { code: operation === "session-link-tile" ? "UNKNOWN_OPERATION" : "FORBIDDEN", message: "Rejected" } }));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  writeFileSync(endpointFile, JSON.stringify({ coordinator: `http://127.0.0.1:${server.address().port}` }));
+  const profile = { endpointFile, url: `http://127.0.0.1:${server.address().port}` };
+  // The tile link is best-effort: an older host's rejection is ignored.
+  await withTile("tile-old", () =>
+    bindNativeSession(profile, { session: { sessionId: "s1" } }, undefined, { role: "agent" }));
+  // A mailbox bind is not best-effort: its failure still reaches the caller.
+  await assert.rejects(
+    withTile("tile-old", () =>
+      bindNativeSession(profile, { session: { sessionId: "s2" } }, { source: "claude", id: "conv-1" }, { role: "agent" })),
+    (error) => error.code === "FORBIDDEN");
+});
+
+test("a local find never forwards to a linked host", async (t) => {
+  const a = await harness(), b = await harness();
+  const { bb } = await link(a, b);
+  await b.close(false);
+  t.after(() => a.close());
+  const ac = a.client("agent-a");
+  await ac.announce({ label: "A", activity: "work" });
+  const local = await ac.find("", { local: true });
+  const authority = (await ac.host()).authority;
+  assert.deepEqual(local.hosts.map((h) => h.authority), [authority]);
+  assert.equal(local.hosts[0].status, "observed");
+  const full = await ac.find("");
+  assert.equal(full.hosts.length, 2);
+  assert.equal(full.hosts.find((h) => h.authority === bb).status, "unknown");
 });

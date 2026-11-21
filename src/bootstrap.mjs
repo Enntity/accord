@@ -90,6 +90,12 @@ export async function bindNativeSession(profile,client,nativeIdentity,{role='nes
   if(nativeIdentity)
     await request(profile.url,admin,'/v1/collaboration',{operation:'session-bind',args:{key:`bind:${sid}:${nativeIdentity.source}`,source:nativeIdentity.source,externalId:nativeIdentity.id,actor:sid}});
   const tile=process.env.TESSERA_TILE_ID;
+  // The tile link is best-effort: a pre-agent-record host has no session-link-tile
+  // and a private adapter may forbid it, but enrollment itself must not fail.
   if(tile)
-    await request(profile.url,admin,'/v1/collaboration',{operation:'session-link-tile',args:{key:`link-tile:${sid}`,actor:sid,tile,role}});
+    try {
+      await request(profile.url,admin,'/v1/collaboration',{operation:'session-link-tile',args:{key:`link-tile:${sid}`,actor:sid,tile,role}});
+    } catch (error) {
+      if (!['UNKNOWN_OPERATION','FORBIDDEN'].includes(error.code)) throw error;
+    }
 }

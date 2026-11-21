@@ -400,7 +400,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     if(operation==='overseer-signal')return overseer.signal(actor,args);
     if(operation==='announce'){const result=collaboration.announce(actor,args);awareness.announce(actor,args);return result;}
     if(operation==='find'){
-      const [result,local]=await Promise.all([collaboration.find(args.query??'',true,collaboration.address(actor),{includeRetired:args.includeRetired===true}),catalog()]);
+      const [result,local]=await Promise.all([collaboration.find(args.query??'',args.local!==true,collaboration.address(actor),{includeRetired:args.includeRetired===true}),catalog()]);
       result.hosts[0].resources=local.resources;
       return args.detail===true?result:compactFind(result,args.query??'');
     }

@@ -279,3 +279,7 @@ the MCP client's own ID or `accord session open --native SOURCE:ID`. CLI
 enrollment never binds environment IDs (an inherited parent ID is ignored);
 when `TESSERA_TILE_ID` is present it records a `nested` tile link through the
 admin-only `session-link-tile {actor, tile, role}` operation.
+
+`find {local:true}` returns only this host's entry: no forwarding to linked
+hosts, even for admin. Adapters polling every few seconds for local tiles
+should pass it.
