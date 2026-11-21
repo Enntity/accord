@@ -50,8 +50,8 @@ test('pools collapse to one summary with held slots still attributed',()=>{
 
 test('the tool list and skill stay small enough for every session to carry',async()=>{
   const {listedTools}=await import('../src/mcp.mjs'),{readFileSync}=await import('node:fs');
-  assert.ok(JSON.stringify(listedTools()).length<4000);assert.equal(listedTools().length,12);
-  assert.ok(readFileSync(new URL('../skills/accord/SKILL.md',import.meta.url),'utf8').length<1500);
+  assert.ok(JSON.stringify(listedTools()).length<5000);assert.equal(listedTools().length,13);
+  assert.ok(readFileSync(new URL('../skills/accord/SKILL.md',import.meta.url),'utf8').length<1700);
 });
 
 test('service and bridge shaping preserve unknown states, limits, and unread notices',()=>{

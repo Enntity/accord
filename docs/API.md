@@ -216,3 +216,38 @@ precedence.
 
 Managed `prepare` bodies now include `holder:{label,address}` of the claim's
 actor. Providers may ignore unknown fields; LLooM does.
+## Scheduled messages (migration 21)
+
+`schedule` (worker/admin, idempotent by `key`) creates a durable schedule that
+delivers a message as the `accord-scheduler` principal: `{key, to?, text,
+wake?, at?, inMs?, everyMs?, startAt?, on?, expiresInMs?, maxFires?}`. `to`
+defaults to the caller's own address and is validated the way `send` validates
+its recipient; `wake` requests `native-prompt` delivery. Exactly one trigger:
+
+- `{at}` or `{inMs}`: one-shot; after downtime it fires once with a late note.
+- `{everyMs >= 60000, startAt?}`: repeats until expiry or `maxFires` (1-10000).
+- `{on:{event:'reservation',resource,states?}}`: `claim.active` maps to
+  `active`; `claim.released`, `claim.expired`, `claim.orphan_expired` and
+  `reservation.reclaimed` map to `released` (default both). Local resources
+  only; use `host` to create it on the owning host.
+- `{on:{event:'job',job,states?}}`: `job.updated` fires only on state change.
+- `{on:{event:'idle',session,idleMs>=60000}}`: fires once when a local
+  session's last activity exceeds `idleMs`, and re-arms on new activity.
+- `{on:{event:'topic',topic}}`: `topic-publish` `{topic,text?<=500}` —
+  rate-limited to 60 per actor per hour — fires matching schedules.
+
+Event triggers scan the durable `events` log in bounded batches, so nothing is
+lost while the coordinator is down. Events within 60 seconds coalesce into one
+message (`pending_events` keeps the last five summaries). One owner is limited
+to 50 active schedules (admin exempt), 60 firings per hour (later fires defer
+to the next minute) and 30-day expiry (default 7 days). A retired, expired or
+closed owner cancels its active schedules; a target that no longer exists at
+fire time marks the schedule `failed`. Each delivered message carries
+`scheduledBy` (the owner's address) and `scheduleId` in its envelope data, and
+its id is deterministic (`hash(scheduleId:firedCount)`), so a retry cannot
+double-send.
+
+`schedules` lists the caller's own schedules (`{all:true}` for admin);
+`schedule-cancel {id}` ends an owned or admin schedule. All three are
+forwardable, so agents on linked hosts schedule on the resource's own
+authority.

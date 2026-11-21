@@ -15,6 +15,19 @@
   `unknown`). Only the two read answers are enriched; mutations stay unmodified.
   Everything is an observation, never ownership. Managed `prepare` bodies now
   carry `holder:{label,address}`; providers may ignore it.
+- Durable scheduled messages (migration 21): `schedule` creates an owned,
+  expiring, cancellable schedule that delivers a message at a time, on an
+  interval, or on an event — reservation activated/released, job state change,
+  a local session idle for N minutes, or a published topic (`topic-publish`,
+  `accord publish`). Event triggers scan the events log through a durable
+  cursor, so events logged while the coordinator was down still fire. Fires
+  coalesce to at most one message per minute and are rate-limited per owner;
+  delivery comes from the `accord-scheduler` principal with `scheduledBy` on
+  the envelope so adapters can apply the owner's wake policy. `schedules`
+  lists the caller's own (`--all` for admin); `schedule-cancel` ends one.
+  MCP gains `accord_schedule` plus `schedules`, `schedule-cancel` and
+  `publish` under `accord_more`; the CLI gains `schedule`, `schedules`,
+  `unschedule` and `publish`. Owner retirement cancels its schedules.
 
 ## 0.7.0
 
