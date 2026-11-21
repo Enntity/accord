@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.0 — 2026-11-20
 
 - Agent record (migration 22): `agent_tiles` non-exclusive tile links
   (`session-link-tile`, admin-only), `titles` with operator/overseer/peer layers
