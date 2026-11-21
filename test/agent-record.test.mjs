@@ -231,3 +231,13 @@ test("a local find never forwards to a linked host", async (t) => {
   assert.equal(full.hosts.length, 2);
   assert.equal(full.hosts.find((h) => h.authority === bb).status, "unknown");
 });
+
+test("a native bridge that enrolled before client names re-enrolls with the same key", (t) => {
+  const { s } = fixture(t);
+  const body = { key: "mcp-native:same", label: "MCP agent", harness: "mcp", authority: s.authority };
+  const first = s.openSession({ id: "a" }, body, () => "native-secret");
+  const again = s.openSession({ id: "a" }, { ...body, client: "devin" }, () => "native-secret");
+  assert.equal(again.sessionId, first.sessionId);
+  assert.equal(s.db.prepare("SELECT client FROM sessions WHERE id=?").get(first.sessionId).client, "devin");
+  assert.throws(() => s.openSession({ id: "a" }, { ...body, label: "Other" }, () => "native-secret"), { code: "KEY_REUSED" });
+});

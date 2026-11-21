@@ -129,21 +129,26 @@ export class Store {
     requireThat(row?.purpose === purpose, 'FORBIDDEN', `A ${purpose} credential is required`, 403);
     return row;
   }
-  openSession(enroller, body, secretFor) {
-    return this.command({id: `enroll:${enroller.id}`}, body, 'session.open', () => {
+  openSession(enroller, request, secretFor) {
+    // The client name is metadata, not part of the enrollment's identity: a
+    // native bridge re-enrolls with the key it used before client names existed.
+    const {client, ...body} = request;
+    if(client!==undefined){
+      text(client, 'client', 40);
+      requireThat(/^[A-Za-z0-9._ -]+$/.test(client), 'INVALID_INPUT', 'Invalid client name', 400);
+    }
+    const opened = this.command({id: `enroll:${enroller.id}`}, body, 'session.open', () => {
       text(body.label, 'label', 120); text(body.harness, 'harness', 80);
-      if(body.client!==undefined){
-        text(body.client, 'client', 40);
-        requireThat(/^[A-Za-z0-9._ -]+$/.test(body.client), 'INVALID_INPUT', 'Invalid client name', 400);
-      }
       const persistent=body.ttlMs===undefined;
       if(!persistent)integer(body.ttlMs, 'ttlMs', 1000, 86400000);
       const sessionId = id(), createdAt = this.now(), expiresAt = persistent ? persistentDeadline : createdAt + body.ttlMs;
       this.provision(sessionId, secretFor(sessionId), 'worker');
-      this.db.prepare('INSERT INTO sessions(id,label,harness,client,created_at,expires_at,closed_at,persistent) VALUES(?,?,?,?,?,?,NULL,?)').run(sessionId, body.label, body.harness, body.client ?? null, createdAt, expiresAt,Number(persistent));
+      this.db.prepare('INSERT INTO sessions(id,label,harness,client,created_at,expires_at,closed_at,persistent) VALUES(?,?,?,?,?,?,NULL,?)').run(sessionId, body.label, body.harness, client ?? null, createdAt, expiresAt,Number(persistent));
       this.emit('session.opened', {session: sessionId, label: body.label, harness: body.harness, expiresAt:persistent?null:expiresAt,persistent});
       return {sessionId, expiresAt:persistent?null:expiresAt, persistent, authority: this.authority};
     });
+    if(client!==undefined)this.mutate(()=>this.db.prepare('UPDATE sessions SET client=? WHERE id=? AND client IS NOT ?').run(client, opened.sessionId, client));
+    return opened;
   }
   endSession(actor, sessionId, body) {
     requireThat(actor.id === sessionId || actor.role === 'admin', 'NOT_OWNER', 'Session belongs to another actor', 403);
