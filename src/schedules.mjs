@@ -214,8 +214,21 @@ export class Schedules {
   applyEvent(ev) {
     let data;
     try { data = JSON.parse(ev.data); } catch { return; }
-    if (OWNER_ENDED_KINDS.has(ev.kind) && typeof data.session === 'string')
-      this.db.prepare("UPDATE schedules SET state='cancelled',ended_reason='owner-retired' WHERE owner=? AND state='active'").run(data.session);
+    if (OWNER_ENDED_KINDS.has(ev.kind) && typeof data.session === 'string') {
+      const raw = data.successor
+        ?? this.db.prepare('SELECT successor FROM sessions WHERE id=?').get(data.session)?.successor
+        ?? this.db.prepare('SELECT successor FROM session_views WHERE id=?').get(data.session)?.successor;
+      const successor = typeof raw === 'string' && raw ? raw.split('/').pop() : null;
+      if (successor) {
+        const label = this.db.prepare('SELECT label FROM participants WHERE actor=?').get(successor)?.label
+          ?? this.db.prepare('SELECT label FROM sessions WHERE id=?').get(successor)?.label;
+        // A rebound session inherits the retired owner's schedules; the owner
+        // label stays unless the successor has one of its own.
+        this.db.prepare("UPDATE schedules SET owner=?,owner_label=coalesce(?,owner_label) WHERE owner=? AND state='active'").run(successor, label ?? null, data.session);
+      } else {
+        this.db.prepare("UPDATE schedules SET state='cancelled',ended_reason='owner-retired' WHERE owner=? AND state='active'").run(data.session);
+      }
+    }
     const summary = this.eventSummary(ev.kind, data);
     for (const row of this.db.prepare("SELECT * FROM schedules WHERE state='active' AND json_extract(trigger,'$.event') IS NOT NULL").all())
       try {
@@ -311,17 +324,27 @@ export class Schedules {
   // firing: the whole batch commits or none of it does, so a lease handover
   // cannot fire twice. Returns whether the outbox needs a flush.
   tick() {
+    // Read-only fast path: an idle tick writes nothing, not even the cursor.
+    const now = this.store.now();
+    const cursor = this.db.prepare('SELECT event_seq FROM schedule_cursor WHERE id=1').get()?.event_seq ?? 0;
+    const hasDue = this.db.prepare("SELECT 1 FROM schedules WHERE state='active' AND next_at IS NOT NULL AND next_at<=? LIMIT 1").get(now);
+    const hasExpiry = this.db.prepare("SELECT 1 FROM schedules WHERE state='active' AND expires_at<=? LIMIT 1").get(now);
+    const hasEvents = this.db.prepare('SELECT 1 FROM events WHERE seq>? LIMIT 1').get(cursor);
+    const hasIdle = this.db.prepare("SELECT 1 FROM schedules WHERE state='active' AND json_extract(trigger,'$.event')='idle' LIMIT 1").get();
+    if (!hasDue && !hasExpiry && !hasEvents && !hasIdle) return false;
     let flushed = false;
     this.store.mutate(() => {
       const now = this.store.now();
-      this.db.prepare("UPDATE schedules SET state='expired',ended_reason='expired' WHERE state='active' AND expires_at<=?").run(now);
+      if (hasExpiry)
+        this.db.prepare("UPDATE schedules SET state='expired',ended_reason='expired' WHERE state='active' AND expires_at<=?").run(now);
       const cursor = this.db.prepare('SELECT event_seq FROM schedule_cursor WHERE id=1').get()?.event_seq ?? 0;
       let last = cursor;
       for (const ev of this.db.prepare('SELECT seq,kind,at,data FROM events WHERE seq>? ORDER BY seq LIMIT ?').all(cursor, EVENT_BATCH)) {
         this.applyEvent(ev);
         last = ev.seq;
       }
-      this.db.prepare('INSERT INTO schedule_cursor VALUES(1,?) ON CONFLICT(id) DO UPDATE SET event_seq=excluded.event_seq').run(last);
+      if (last !== cursor)
+        this.db.prepare('INSERT INTO schedule_cursor VALUES(1,?) ON CONFLICT(id) DO UPDATE SET event_seq=excluded.event_seq').run(last);
       this.idlePass(now);
       flushed = this.fireDue(now);
     });

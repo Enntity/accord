@@ -88,7 +88,9 @@ export class Store {
         deferred INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL);
       CREATE INDEX schedules_due ON schedules(state,next_at);
       CREATE INDEX schedules_owner ON schedules(owner,state);
-      CREATE TABLE schedule_cursor(id INTEGER PRIMARY KEY CHECK(id=1), event_seq INTEGER NOT NULL);`]); this.now = now; this.leaderMs = leaderMs;
+      CREATE TABLE schedule_cursor(id INTEGER PRIMARY KEY CHECK(id=1), event_seq INTEGER NOT NULL);
+      INSERT INTO schedule_cursor VALUES(1,(SELECT coalesce(max(seq),0) FROM events));
+      CREATE INDEX events_kind_at ON events(kind,at);`]); this.now = now; this.leaderMs = leaderMs;
     transaction(this.db, () => {
       this.db.prepare("INSERT OR IGNORE INTO meta VALUES('authority',?)").run(id());
       this.db.prepare("INSERT OR IGNORE INTO meta VALUES('paused','false')").run();

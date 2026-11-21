@@ -488,6 +488,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
       if(body.operation==='directory')value={participants:collaboration.directory(body.args?.query??''),resources:[...(await host()).resources,...await managers.resources()]};
       else if(body.operation==='deliver'){
         requireThat(body.args?.from===`${peer.authority}/${body.actor}`,'FORBIDDEN','Sender does not match linked host',403);
+        requireThat(body.args?.scheduledBy===undefined||String(body.args.scheduledBy).split('/')[0]===peer.authority,'FORBIDDEN','scheduledBy does not match linked host',403);
         value=collaboration.deliver(body.args);
       }else{
         requireThat(['capabilities','resources','reserve','reservation','release','renew','start','process','workload-register','workload-launch','workload-list','telemetry','metadata','sessions','session-read','jobs','job','overseer','session-snooze','memories','memory-read','schedule','schedules','schedule-cancel'].includes(body.operation),'FORBIDDEN','Operation cannot be forwarded',403);

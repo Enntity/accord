@@ -339,3 +339,74 @@ test("a linked host schedules a reservation trigger against its own resource", a
     return row?.fired_count === 1;
   });
 });
+
+test("an upgrade starts the event cursor at the current log end, so old events never fire", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "accord-sched-upg-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = join(dir, "coordinator.sqlite");
+  const seed = new Store(file);
+  seed.provision("admin", "admin", "admin");
+  seed.provision("a", "a", "worker");
+  seed.db.prepare("INSERT INTO events(at,kind,data) VALUES(1,'topic.published',?)").run(JSON.stringify({ topic: "fleet", text: "old", actor: "x" }));
+  seed.close();
+  // Rewind to before migration 21; reopening re-runs it against the seeded log.
+  const old = new DatabaseSync(file);
+  const preSeq = old.prepare("SELECT max(seq) n FROM events").get().n;
+  old.exec("DROP TABLE schedules; DROP TABLE schedule_cursor; DROP INDEX events_kind_at; DELETE FROM migrations WHERE version>=21");
+  old.close();
+  const s = new Store(file, { now: () => 1_000_000, leaderMs: 30000 });
+  s.takeLeadership();
+  t.after(() => s.close());
+  const cursor = s.db.prepare("SELECT event_seq FROM schedule_cursor WHERE id=1").get().event_seq;
+  assert.equal(cursor, preSeq);
+  const c = new Collaboration(s, file);
+  t.after(() => c.close());
+  const sc = new Schedules(s, c);
+  const sched = sc.create({ id: "a", role: "worker" }, { key: "u1", text: "ping", on: { event: "topic", topic: "fleet" } });
+  sc.tick();
+  assert.equal(s.db.prepare("SELECT fired_count FROM schedules WHERE id=?").get(sched.id).fired_count, 0);
+  sc.publish({ id: "a", role: "worker" }, { key: "u2", topic: "fleet" });
+  sc.tick();
+  assert.equal(s.db.prepare("SELECT fired_count FROM schedules WHERE id=?").get(sched.id).fired_count, 1);
+});
+
+test("a rebound successor inherits the retired owner's schedules instead of cancelling", (t) => {
+  const f = fixture(t);
+  const watcher = f.enroll("Watcher");
+  const sched = f.sc.create(f.a, { key: "inh", to: `${f.s.authority}/${watcher}`, text: "keep watching", everyMs: 60000 });
+  // A superseding session records a successor the way enrolment rebound does.
+  f.s.db.prepare("UPDATE sessions SET retired_at=?,retired_reason='superseded',successor='a2' WHERE id='a'").run(f.now());
+  f.s.emit("session.retired", { session: "a", reason: "superseded", successor: "a2" });
+  f.sc.tick();
+  const row = f.s.db.prepare("SELECT owner,state,ended_reason FROM schedules WHERE id=?").get(sched.id);
+  assert.equal(row.owner, "a2");
+  assert.equal(row.state, "active");
+  assert.equal(row.ended_reason, null);
+  // It still fires to the original target.
+  f.advance(60000);
+  f.sc.tick();
+  assert.equal(f.s.db.prepare("SELECT fired_count FROM schedules WHERE id=?").get(sched.id).fired_count, 1);
+});
+
+test("a schedule on B delivers to a linked host A from B/accord-scheduler with scheduledBy intact", async (t) => {
+  const a = await harness(), b = await harness();
+  t.after(async () => { await Promise.all([a.close(false), b.close(false)]); });
+  const { aa, bb } = await link(a, b);
+  const ac = a.client("agent-a"), bc = b.client("agent-b");
+  await ac.announce({ label: "A agent", activity: "work" });
+  const sched = await bc.collaborate("schedule", { key: "cross-1", to: `${aa}/agent-a`, text: "from B", inMs: 60000 });
+  assert.equal(sched.state, "active");
+  // Force the schedule due and let the server tick fire and flush it.
+  const db = new DatabaseSync(join(b.data, "coordinator.sqlite"));
+  db.prepare("UPDATE schedules SET next_at=1 WHERE id=?").run(sched.id);
+  db.close();
+  let inbox;
+  await eventually(async () => {
+    inbox = await ac.collaborate("inbox", {});
+    return inbox.messages?.length > 0;
+  });
+  const mail = inbox.messages[0];
+  assert.equal(mail.from, `${bb}/accord-scheduler`);
+  assert.equal(mail.scheduledBy, `${bb}/agent-b`);
+  assert.equal(mail.scheduleId, sched.id);
+});

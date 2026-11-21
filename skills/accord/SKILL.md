@@ -20,7 +20,7 @@ no arguments, bootstrap then `accord_announce`.
   `leaseMs` only with a renewer. Unavailable means unknown, never free.
   Label reserved containers `io.enntity.owner`/`io.enntity.job`.
 - Waiting: end your turn; don't poll. Claude Code wakes for mail and grants; on Codex
-  `accord_announce` with `state: waiting`. A grant is a hint: confirm
+  first `accord_announce` with `state: waiting`. A grant is a hint: confirm
   with `accord_reservation`.
 - To check back later, schedule rather than poll: `accord_schedule` sends you a
   message at a time, interval, or event (reservation, job, idle, topic).
