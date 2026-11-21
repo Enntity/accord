@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- Agent record (migration 22): `agent_tiles` non-exclusive tile links
+  (`session-link-tile`, admin-only), `titles` with operator/overseer/peer layers
+  (existing `given_title` copied to the peer layer), and `sessions.client`.
+  Participants now expose an `agent` record (client, tile link, layered title,
+  task, previous addresses, mailbox binding). `overseer-designate` names the
+  host overseer; `session-title` writes the caller's layer. `find` accepts
+  `{local:true}` to skip forwarding to linked hosts.
+- Fixed: CLI enrollment (`session open`, `accord run`) no longer binds
+  inherited environment IDs to the mailbox — that could retire the tile's own
+  agent session as `superseded`. Tile IDs are recorded as `nested` links
+  instead; `accord session open --native SOURCE:ID` covers trusted launchers.
+- Fixed: the MCP bridge stripped `detail` from every awareness operation, so
+  `accord_report` never forwarded progress details — same-title reports counted
+  as unchanged and `progressAt` never advanced. It is now stripped only for
+  `accord_sessions`.
+
 - Workload observations on resources: on Linux, host telemetry now also reports
   GPU compute processes and running containers (`workloads`), plus trusted
   provider runtime reports posted through the admin-only `workload-report`

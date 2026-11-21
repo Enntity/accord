@@ -93,6 +93,9 @@ export function mcpAdapter(profile,{identity=nativeSessionIdentity(),clientName}
       if(name==='accord_recall_read'){const {host,...body}=args;return c.collaborate('memory-read',body,host);}
       if(awarenessOps[name]){
         const {host,detail,...body}=args;
+        // `detail` is a view flag only for accord_sessions; for every other op it is
+        // real payload (e.g. accord_report's progress detail) and must pass through.
+        if(name!=='accord_sessions')body.detail=detail;
         if(name==='accord_session_read')body.limit??=10;
         const result=await c.collaborate(awarenessOps[name],{...body,key:args.key??randomUUID()},host);
         return name==='accord_sessions'&&!detail?compact.sessions(result):result;
