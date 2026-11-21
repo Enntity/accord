@@ -274,11 +274,18 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     try{rows=readdirSync(linksDir).filter(f=>f.endsWith('.json')).flatMap(f=>{try{const j=JSON.parse(readFileSync(join(linksDir,f),'utf8'));return typeof j.host==='string'&&typeof j.authority==='string'?[{host:j.host,authority:j.authority}]:[];}catch{return[];}});}catch{/* No link directory. */}
     linkFileCache={at:store.now(),rows};return rows;
   }
+  const telemetryFlights=new Map();
   async function hostTelemetry(authority,actor){
     const hit=workloadTelemetry.get(authority);
     if(hit&&store.now()-hit.at<10000)return hit.value;
-    const value=authority===store.authority?await telemetry.telemetry():await collaboration.forward(authority,'telemetry',{},actor);
-    workloadTelemetry.set(authority,{at:store.now(),value});return value;
+    let flight=telemetryFlights.get(authority);
+    if(!flight){
+      flight=(authority===store.authority?telemetry.telemetry():collaboration.forward(authority,'telemetry',{},actor))
+        .then(value=>{workloadTelemetry.set(authority,{at:store.now(),value});return value;})
+        .finally(()=>{if(telemetryFlights.get(authority)===flight)telemetryFlights.delete(authority);});
+      telemetryFlights.set(authority,flight);
+    }
+    return flight;
   }
   async function observeWorkloads(resource,actor){
     const names=(resource.hosts??[]).map(String).filter(Boolean).slice(0,32),links=linkFiles();
@@ -293,9 +300,14 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     }));
     // Reports may live on any fetched host; a node names the resource's host.
     const reports=[...samples.values()].filter(Boolean).flatMap(t=>(t.workloads?.reports??[]).map(r=>({...r,authority:t.authority})));
-    return workloadView({wanted,samples,reports,holder:resource.holder,authority:store.authority,now:store.now()});
+    // The reservation prefix derives from the authority that owns the claim,
+    // which for a forwarded resource is the reporting host, not the caller.
+    const resourceAuthority=String(resource.id??'').split('/')[0]||store.authority;
+    return workloadView({wanted,samples,reports,holder:resource.holder,authority:resourceAuthority,now:store.now()});
   }
-  async function attachWorkloads(payload,actor){
+  async function attachWorkloads(payload,actor,operation){
+    // Only the two read answers pay the telemetry cost; mutations stay cheap.
+    if(operation!=='resources'&&operation!=='reservation')return payload;
     try{
       if(payload&&Array.isArray(payload.resources)){
         await Promise.all(payload.resources.map(async r=>{if(Array.isArray(r.hosts)&&r.hosts.length)r.workloads=await observeWorkloads(r,actor);}));
@@ -489,12 +501,12 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
       const body=await readBody(req);
       if(body.host&&body.host!==store.authority){
         requireThat(['capabilities','resources','reserve','reservation','release','renew','start','process','workload-register','workload-launch','workload-list','telemetry','metadata','sessions','session-read','jobs','job','overseer','session-snooze','memories','memory-read'].includes(body.operation),'FORBIDDEN','Operation cannot be forwarded',403);
-        return attachWorkloads(await collaboration.forward(body.host,body.operation,body.args,actor),actor);
+        return attachWorkloads(await collaboration.forward(body.host,body.operation,body.args,actor),actor,body.operation);
       }
       if(body.operation==='sessions'&&!body.host)return sessionsAcrossHosts(actor,body.args);
       if(body.operation==='memories'&&!body.host)return memoriesAcrossHosts(actor,body.args);
       const gone=new AbortController();res.once('close',()=>gone.abort());
-      return attachWorkloads(await collaborate(actor,body.operation,body.args,gone.signal),actor);
+      return attachWorkloads(await collaborate(actor,body.operation,body.args,gone.signal),actor,body.operation);
     }
     if (url.pathname === '/v1/bootstrap' && req.method === 'GET') {
       if(!store.db.prepare('SELECT actor FROM participants WHERE actor=?').get(actor.id))collaboration.announce(actor,{key:'bootstrap-registration',label:actor.session?.label??actor.id,capabilities:[],activity:'available'});
@@ -504,7 +516,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     }
     if (url.pathname === '/v1/network' && req.method === 'GET') return {hosts:[{status:'observed',host:await host()},...await network()]};
     if(url.pathname==='/v1/plugins'&&req.method==='GET')return {plugins};
-    if(url.pathname==='/v1/resources'&&req.method==='GET')return attachWorkloads(await catalog(),actor);
+    if(url.pathname==='/v1/resources'&&req.method==='GET')return attachWorkloads(await catalog(),actor,'resources');
     if(url.pathname==='/v1/workloads/adopt'&&req.method==='POST'){
       requireThat(actor.role==='admin','FORBIDDEN','Operator adoption requires administrator authority',403);
       const body=await readBody(req),claim=store.db.prepare('SELECT * FROM claims WHERE id=?').get(body.claimId);

@@ -9,8 +9,10 @@
   Local `resources`/`reservation` answers — MCP, CLI and HTTP, local or
   forwarded — attach `workloads` to every resource with a non-empty `hosts`:
   containers with summed GPU memory, host GPU processes, and report runtimes
-  joined by `node`/`container`, each with an `owner` label where one is known
-  (`reservation` > `lloom` > `declared` `io.enntity.*` labels > `unknown`).
+  joined by `node`/`container` — suspended or failed lanes listed on their own —
+  each with an `owner` label where one is known (`reservation` > `lloom`
+  reported as `LLooM runtime <id>` > `declared` `io.enntity.*` labels >
+  `unknown`). Only the two read answers are enriched; mutations stay unmodified.
   Everything is an observation, never ownership. Managed `prepare` bodies now
   carry `holder:{label,address}`; providers may ignore it.
 

@@ -145,22 +145,33 @@ export function workloadView({wanted,samples,reports=[],holder=null,authority,no
     if(h.status!=='observed')continue;
     const wl=samples.get(h.authority).workloads??{},containers=wl.containers??[],processes=wl.processes??[];
     const annotated=new Set();
-    const mine=flat.filter(item=>item.node!==undefined?item.node===h.name:item.reportAuthority===h.authority);
+    // One report item per runtime id on this host: a host's own gateway wins
+    // over a head that also reports its worker runtimes.
+    const mine=[];
+    for(const item of flat){
+      const belongs=item.node!==undefined?item.node===h.name:item.reportAuthority===h.authority;
+      if(!belongs)continue;
+      const existing=mine.find(other=>other.id===item.id);
+      if(!existing){mine.push(item);continue;}
+      if(item.reportAuthority===h.authority&&existing.reportAuthority!==h.authority)mine[mine.indexOf(existing)]=item;
+    }
     for(const c of containers){
       const match=mine.find(item=>item.container===c.name);
       if(match)annotated.add(match);
       const item={host:h.name,kind:'container',name:c.name,image:c.image,state:'running',gpuMemoryMiB:c.gpuMemoryMiB??undefined};
       if(match){item.runtime=match.id;item.state=match.state;if(match.model!==undefined)item.model=match.model;if(match.since!==undefined)item.since=match.since;if(match.by!==undefined)item.by=match.by;}
       if(prefix&&c.name.startsWith(prefix)){item.owner=holder.label??holder.address;item.ownerSource='reservation';}
-      else if(match?.by){item.owner=match.by;item.ownerSource='lloom';}
+      else if(match){item.owner=`LLooM runtime ${match.id}`;item.ownerSource='lloom';}
       else if(c.labels?.['io.enntity.owner']){item.owner=c.labels['io.enntity.owner'];item.ownerSource='declared';}
       else if(c.labels?.['io.enntity.job']){item.owner=c.labels['io.enntity.job'];item.ownerSource='declared';}
       else item.ownerSource='unknown';
       items.push(item);
     }
     for(const p of processes)items.push({host:h.name,kind:'process',name:p.command,pid:p.pid,gpuMemoryMiB:p.gpuMemoryMiB??undefined,ownerSource:'unknown'});
-    for(const item of mine.filter(i=>!annotated.has(i)&&['suspended','stopped','failed'].includes(i.state)))
-      items.push({host:h.name,kind:'runtime',name:item.id,state:item.state,...(item.model!==undefined?{model:item.model}:{}),...(item.since!==undefined?{since:item.since}:{}),...(item.by!==undefined?{by:item.by,owner:item.by}:{}),ownerSource:item.by?'lloom':'unknown'});
+    // Stopped runtimes are routine on-demand lanes; only states someone must
+    // see are listed — suspended and failed.
+    for(const item of mine.filter(i=>!annotated.has(i)&&['suspended','failed'].includes(i.state)))
+      items.push({host:h.name,kind:'runtime',name:item.id,state:item.state,owner:`LLooM runtime ${item.id}`,ownerSource:'lloom',...(item.model!==undefined?{model:item.model}:{}),...(item.since!==undefined?{since:item.since}:{}),...(item.by!==undefined?{by:item.by}:{})});
   }
   return {observedAt:now,note:'Observed on the host; not ownership',hosts,items};
 }

@@ -102,13 +102,19 @@ ownership', hosts, items}`. Host names resolve to authorities through the local
 host name, `~/.config/accord/links/*.json` (`host` → `authority`), then a linked
 host's advertised name; an unmatched name is `unavailable` with reason `host
 not linked`. Report items join by `node`, `container` or reporting host.
-Containers get an `owner` label where one is known, in precedence order:
-`reservation` (an `accord_workload`-registered binding of the current claim),
-`lloom` (a matched runtime report), `declared` (`io.enntity.owner` or
-`io.enntity.job` labels — what the container claims, not proof), `unknown`.
-GPU processes fold into their container's `gpuMemoryMiB`; only host-level GPU
-processes appear as `process` items. The MCP compact view renders up to eight
-one-line items per resource plus `+N more`.
+Only `resources` and `reservation` answers are enriched; mutations and other
+operations return unmodified. Per (host, runtime id) one report item wins — the
+host's own report over a head's duplicate. Containers get an `owner` label
+where one is known, in precedence order: `reservation` (an
+`accord_workload`-registered binding of the current claim), `lloom` (a matched
+runtime report — the owner reads `LLooM runtime <id>`; `by` is who suspended
+it, kept as its own field), `declared` (`io.enntity.owner` or `io.enntity.job`
+labels — what the container claims, not proof), `unknown`. Report items with no
+matching container appear as `runtime` items only when `suspended` or `failed`
+— on-demand `stopped` lanes would bury the view. GPU processes fold into their
+container's `gpuMemoryMiB`; only host-level GPU processes appear as `process`
+items. The MCP compact view renders up to eight one-line items per resource
+plus `+N more`.
 
 ## Adapters
 

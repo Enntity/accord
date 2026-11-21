@@ -208,9 +208,11 @@ Reports surface under `workloads.reports` in host telemetry.
 
 Local `resources` and `reservation` answers gain a `workloads` object on each
 resource with a non-empty `hosts` list: `{observedAt, note:'Observed on the
-host; not ownership', hosts, items}`. These are observations only — they grant
-no ownership and never gate admission. See `docs/telemetry.md` for collection,
-host-name resolution and the owner-label precedence.
+host; not ownership', hosts, items}`. Only these two read operations are
+enriched — reserve, release and other mutations return unmodified. These are
+observations only — they grant no ownership and never gate admission. See
+`docs/telemetry.md` for collection, host-name resolution and the owner-label
+precedence.
 
 Managed `prepare` bodies now include `holder:{label,address}` of the claim's
 actor. Providers may ignore unknown fields; LLooM does.

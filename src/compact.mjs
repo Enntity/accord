@@ -14,7 +14,7 @@ export function workloadLines(workloads){
     if(Number.isFinite(item.gpuMemoryMiB))parts.push(`${(item.gpuMemoryMiB/1024).toFixed(1)} GiB GPU`);
     if(item.kind==='runtime'&&item.state&&item.state!=='running')parts.push(`${item.state}${item.since?` since ${zDate(item.since)}`:''}${item.by?` by ${item.by}`:''}`);
     else if(item.runtime&&item.state)parts.push(item.state);
-    if(item.owner)parts.push(`owner ${item.owner}`);
+    if(item.owner&&item.kind!=='runtime')parts.push(`owner ${item.owner}`);
     else if(item.ownerSource==='unknown'||!item.ownerSource)parts.push('owner unknown');
     return parts.join(' · ');
   });
