@@ -136,7 +136,6 @@ test("expiry ends an active schedule before it can fire", (t) => {
 
 test("a restart during downtime fires once and reports lateness", (t) => {
   const dir = mkdtempSync(join(tmpdir(), "accord-sched-restart-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
   const f = fixture(t, { dir });
   const sched = f.sc.create(f.a, { key: "down", text: "missed", at: f.now() + 60000 });
   f.s.releaseLeadership();
@@ -147,7 +146,7 @@ test("a restart during downtime fires once and reports lateness", (t) => {
   s2.takeLeadership();
   const c2 = new Collaboration(s2, f.file);
   const sc2 = new Schedules(s2, c2);
-  t.after(() => { c2.close(); s2.close(); });
+  t.after(() => { c2.close(); s2.close(); rmSync(dir, { recursive: true, force: true }); });
   sc2.tick();
   const row = s2.db.prepare("SELECT * FROM schedules WHERE id=?").get(sched.id);
   assert.equal(row.state, "done");
@@ -240,7 +239,6 @@ test("several events inside 60 seconds coalesce into one message", (t) => {
 
 test("an event logged while the server is down still fires after restart", (t) => {
   const dir = mkdtempSync(join(tmpdir(), "accord-sched-restart-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
   const f = fixture(t, { dir });
   f.s.db.prepare("INSERT INTO resources(id) VALUES('gpu0')").run();
   const sched = f.sc.create(f.a, { key: "durable", text: "while you were away", on: { event: "reservation", resource: "gpu0" } });
@@ -255,7 +253,7 @@ test("an event logged while the server is down still fires after restart", (t) =
   s2.takeLeadership();
   const c2 = new Collaboration(s2, f.file);
   const sc2 = new Schedules(s2, c2);
-  t.after(() => { c2.close(); s2.close(); });
+  t.after(() => { c2.close(); s2.close(); rmSync(dir, { recursive: true, force: true }); });
   sc2.tick();
   assert.match(JSON.parse(s2.db.prepare("SELECT envelope FROM message_outbox").get().envelope).text, /claim\.active c1/);
   // The cursor is durable: another tick does not refire.
@@ -306,12 +304,13 @@ test("the hourly firing limit defers to the next minute instead of dropping", (t
 });
 
 test("a non-leader cannot fire; a lease handover does not double-send", (t) => {
+  let s2, c2;
+  t.after(() => { c2?.close(); s2?.close(); });
   const f = fixture(t);
   const sched = f.sc.create(f.a, { key: "lead", text: "once", inMs: 60000 });
-  const s2 = new Store(f.file, { now: () => f.now(), leaderMs: 30000 });
-  const c2 = new Collaboration(s2, f.file);
+  s2 = new Store(f.file, { now: () => f.now(), leaderMs: 30000 });
+  c2 = new Collaboration(s2, f.file);
   const sc2 = new Schedules(s2, c2);
-  t.after(() => { c2.close(); s2.close(); });
   f.advance(61000);
   assert.throws(() => sc2.tick(), (e) => e.code === 'LEADER_LOST');
   f.sc.tick();
@@ -333,16 +332,13 @@ test("a linked host schedules a reservation trigger against its own resource", a
   assert.deepEqual(listed.schedules.map((s) => s.id), [sched.id]);
   // topic-publish stays local: publish on B, the schedule fires there.
   await bc.collaborate("topic-publish", { key: "tp1", topic: "fleet", text: "go" });
-  await eventually(async () => {
-    const row = new DatabaseSync(join(b.data, "coordinator.sqlite"), { readOnly: true })
-      .prepare("SELECT fired_count FROM schedules WHERE id=?").get(sched.id);
-    return row?.fired_count === 1;
-  });
+  const db = new DatabaseSync(join(b.data, "coordinator.sqlite"), { readOnly: true });
+  t.after(() => db.close());
+  await eventually(async () => db.prepare("SELECT fired_count FROM schedules WHERE id=?").get(sched.id)?.fired_count === 1);
 });
 
 test("an upgrade starts the event cursor at the current log end, so old events never fire", (t) => {
   const dir = mkdtempSync(join(tmpdir(), "accord-sched-upg-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
   const file = join(dir, "coordinator.sqlite");
   const seed = new Store(file);
   seed.provision("admin", "admin", "admin");
@@ -356,11 +352,10 @@ test("an upgrade starts the event cursor at the current log end, so old events n
   old.close();
   const s = new Store(file, { now: () => 1_000_000, leaderMs: 30000 });
   s.takeLeadership();
-  t.after(() => s.close());
   const cursor = s.db.prepare("SELECT event_seq FROM schedule_cursor WHERE id=1").get().event_seq;
   assert.equal(cursor, preSeq);
   const c = new Collaboration(s, file);
-  t.after(() => c.close());
+  t.after(() => { c.close(); s.close(); rmSync(dir, { recursive: true, force: true }); });
   const sc = new Schedules(s, c);
   const sched = sc.create({ id: "a", role: "worker" }, { key: "u1", text: "ping", on: { event: "topic", topic: "fleet" } });
   sc.tick();
@@ -406,12 +401,8 @@ test("a schedule on B delivers to a linked host A from B/accord-scheduler with s
   const { aa, bb } = await link(a, b);
   const ac = a.client("agent-a"), bc = b.client("agent-b");
   await ac.announce({ label: "A agent", activity: "work" });
-  const sched = await bc.collaborate("schedule", { key: "cross-1", to: `${aa}/agent-a`, text: "from B", inMs: 60000 });
+  const sched = await bc.collaborate("schedule", { key: "cross-1", to: `${aa}/agent-a`, text: "from B", at: Date.now() });
   assert.equal(sched.state, "active");
-  // Force the schedule due and let the server tick fire and flush it.
-  const db = new DatabaseSync(join(b.data, "coordinator.sqlite"));
-  db.prepare("UPDATE schedules SET next_at=1 WHERE id=?").run(sched.id);
-  db.close();
   let inbox;
   await eventually(async () => {
     inbox = await ac.collaborate("inbox", {});
