@@ -348,7 +348,7 @@ test("an upgrade starts the event cursor at the current log end, so old events n
   // Rewind to before migration 21; reopening re-runs it against the seeded log.
   const old = new DatabaseSync(file);
   const preSeq = old.prepare("SELECT max(seq) n FROM events").get().n;
-  old.exec("DROP TABLE schedules; DROP TABLE schedule_cursor; DROP INDEX events_kind_at; DELETE FROM migrations WHERE version>=21");
+  old.exec("ALTER TABLE sessions DROP COLUMN client; DROP TABLE agent_tiles; DROP TABLE titles; DROP TABLE schedules; DROP TABLE schedule_cursor; DROP INDEX events_kind_at; DELETE FROM migrations WHERE version>=21");
   old.close();
   const s = new Store(file, { now: () => 1_000_000, leaderMs: 30000 });
   s.takeLeadership();

@@ -9,7 +9,7 @@ Call `accord_bootstrap` with `label` and `activity`. If the installed tool takes
 no arguments, bootstrap then `accord_announce`.
 
 - Before overlapping work: `accord_find` (self is omitted). Observations are
-  records, not agents; matching titles don't prove a collision.
+  records, not agents; matching titles prove no collision.
 - Messages: `accord_send` to a discovered address. Check `accord_inbox` when
   `inboxPending` appears. After handling, `accord_read` its `deliveryId` — delivery
   isn't a read. A retired address errs; send to its successor.
@@ -23,7 +23,8 @@ no arguments, bootstrap then `accord_announce`.
   first `accord_announce` with `state: waiting`. A grant is a hint: confirm
   with `accord_reservation`.
 - To check back later, schedule rather than poll: `accord_schedule` sends you a
-  message at a time, interval, or event (reservation, job, idle, topic).
+  message at a time, interval, or event (reservation/job/idle/topic).
+- Name yourself with `accord_announce` `label`; operator/overseer titles win.
 - Retry uncertain effects with the same `key`.
 - Less common tools: `accord_more`. See REFERENCE.md.
 

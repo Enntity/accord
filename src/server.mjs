@@ -37,11 +37,12 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     collaboration=new Collaboration(store,db);
     memory=new MemoryPanorama(store,memoryConfig());
     managers=new ResourceManagers(store,dirname(db));
-    awareness=new SessionAwareness(store);
+    awareness=new SessionAwareness(store,{hostName});
     attention=new Attention(store,collaboration,join(dirname(db),'attention'),{perHour:Number(process.env.ACCORD_WAKE_PER_HOUR||6)});
     telemetry=createTelemetry({authority:store.authority,hostName,collectors:telemetryCollectors??createCollectors({nativeHelper:sensorPath(dirname(db))}),workloads:()=>hostWorkloads.read()});
     store.takeLeadership();
     overseer=new Overseer(store,awareness,collaboration);
+    collaboration.agentRecord=actorId=>awareness.agentRecord(actorId);
     schedules=new Schedules(store,collaboration,{resourceExists:localId=>!!store.db.prepare('SELECT 1 FROM resources WHERE id=?').get(localId)||!!store.binding(localId)||managers.owns(localId)});
   } catch (error) {
     attention?.close();
@@ -367,6 +368,8 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     if(operation==='manager-schedules'){requireThat(actor.role==='admin','FORBIDDEN','Operator required',403);return managers.schedules();}
     if(operation==='summary-configure')return observationRuntime.configureSummary(actor,args);
     if(operation==='session-bind')return awareness.bind(actor,args);
+    if(operation==='session-link-tile')return awareness.linkTile(actor,args);
+    if(operation==='overseer-designate')return awareness.designate(actor,args);
     if(operation==='lifecycle-retire')return awareness.retire(actor,args);
     if(operation==='lifecycle-sweep')return awareness.sweep(actor,args);
     if(['context-inbox','context-wait'].includes(operation)) {
@@ -392,7 +395,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     if(operation==='ask')return awareness.ask(actor,args);
     if(operation==='answer')return awareness.answer(actor,args);
     if(operation==='question')return awareness.question(actor,args.id);
-    if(operation==='overseer')return {rules:overseer.rules(),...overseer.incidents()};
+    if(operation==='overseer')return {rules:overseer.rules(),overseer:awareness.overseerAddress(),...overseer.incidents()};
     if(operation==='overseer-rule')return overseer.configure(actor,args);
     if(operation==='overseer-signal')return overseer.signal(actor,args);
     if(operation==='announce'){const result=collaboration.announce(actor,args);awareness.announce(actor,args);return result;}

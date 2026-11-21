@@ -5,13 +5,13 @@ import { defaultWindowMs, windowCapability, windowDuration } from './reservation
 
 export class AccordClient {
   constructor(url, credential) { this.url = loopbackUrl(url); this.credential = credential; }
-  static async enroll(url, enrollment, {label, harness = 'cli', ttlMs, key = randomUUID(), authority} = {}) {
+  static async enroll(url, enrollment, {label, harness = 'cli', client, ttlMs, key = randomUUID(), authority} = {}) {
     requireThat(authority, 'AUTHORITY_REQUIRED', 'Pin the expected host authority before enrollment');
     const descriptor = await request(url, '', '/.well-known/accord');
     requireThat(descriptor.authority === authority, 'AUTHORITY_MISMATCH', 'Host identity changed; enrollment refused');
-    const result = await request(url, enrollment, '/v1/sessions', {key, label, harness, authority, ...(ttlMs!==undefined ? {ttlMs} : {})});
+    const result = await request(url, enrollment, '/v1/sessions', {key, label, harness, authority, ...(client!==undefined ? {client} : {}), ...(ttlMs!==undefined ? {ttlMs} : {})});
     requireThat(result.authority === authority, 'AUTHORITY_MISMATCH', 'Enrollment returned a different authority');
-    const client = new AccordClient(url, result.credential); client.session = result; return client;
+    const session = new AccordClient(url, result.credential); session.session = result; return session;
   }
   registerResource(manifest,key=randomUUID()){return request(this.url,this.credential,'/v1/resources',{key,manifest});}
   adoptWorkloads(body){return request(this.url,this.credential,'/v1/workloads/adopt',body,30000);}

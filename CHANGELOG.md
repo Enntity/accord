@@ -28,6 +28,19 @@
   MCP gains `accord_schedule` plus `schedules`, `schedule-cancel` and
   `publish` under `accord_more`; the CLI gains `schedule`, `schedules`,
   `unschedule` and `publish`. Owner retirement cancels its schedules.
+- The agent record (migration 22): participants in `find`/`sessions` carry
+  `agent:{host, client, tile?, title, titleSource, titles?, task?, previous?,
+  native?}` — the connecting client name, a non-exclusive `agent_tiles` link
+  (role `agent` for the tile's bridge, `nested` for sessions inside it), a
+  layered display title, the current task and the supersession chain. Titles
+  now have layers: admin writes `operator`, the designated overseer
+  (`overseer-designate`) writes `overseer`, others write `peer`, and each
+  clears only its own; `givenTitle` keeps reporting the highest non-own
+  layer. Mailbox bindings are created only from an explicit trusted identity:
+  CLI enrollment no longer binds inherited `CODEX_THREAD_ID`,
+  `CLAUDE_SESSION_ID` or `TESSERA_TILE_ID` — a tile it runs inside becomes a
+  `nested` link — and `accord session open --native SOURCE:ID` covers trusted
+  launchers.
 
 ## 0.7.0
 
