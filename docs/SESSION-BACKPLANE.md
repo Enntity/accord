@@ -148,6 +148,10 @@ stays readable by id, and its `retiredAt`, `retiredReason` and optional
 `exited` (terminal, not yet retired), or `retired`. The older `presence` field
 (`recent`/`unknown`/`offline`) is unchanged for existing clients.
 
+Retirement also cancels any active schedules the session owned: the
+`session.retired` (or `session.closed`) event ends them as
+`ended_reason:'owner-retired'` (see `docs/API.md` Scheduled messages).
+
 Retirement happens four ways:
 
 - **Explicit close.** Closing a session also retires it with reason `closed`;

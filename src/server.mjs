@@ -4,6 +4,7 @@ import { ResourceManagers } from './resource-managers.mjs';
 import { awarenessRuntime } from './awareness-runtime.mjs';
 import { SessionAwareness } from './session-awareness.mjs';
 import { Overseer } from './overseer.mjs';
+import { Schedules } from './schedules.mjs';
 import { dirname,join } from 'node:path';
 import { homedir } from 'node:os';
 import { readdirSync } from 'node:fs';
@@ -29,7 +30,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
   requireThat(parsed.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(parsed.hostname) && !parsed.username && !parsed.password,
     'BAD_DRIVER_URL', 'This release supports a loopback HTTP driver only', 400);
   const store = new Store(db, { leaderMs });
-  let collaboration,memory,managers,awareness,overseer,attention,telemetry;
+  let collaboration,memory,managers,awareness,overseer,attention,telemetry,schedules;
   try {
     // Synchronous mailbox migrations and config reads can outlast a lease. Finish
     // them before taking leadership; no timer can renew while they block startup.
@@ -41,6 +42,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     telemetry=createTelemetry({authority:store.authority,hostName,collectors:telemetryCollectors??createCollectors({nativeHelper:sensorPath(dirname(db))}),workloads:()=>hostWorkloads.read()});
     store.takeLeadership();
     overseer=new Overseer(store,awareness,collaboration);
+    schedules=new Schedules(store,collaboration,{resourceExists:localId=>!!store.db.prepare('SELECT 1 FROM resources WHERE id=?').get(localId)||!!store.binding(localId)||managers.owns(localId)});
   } catch (error) {
     attention?.close();
     try { collaboration?.close(); } finally {
@@ -132,6 +134,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
       store.sweep();
       collaboration.schedule();
       try{lifecycleNotices();}catch{/* Notices retry on the next tick. */}
+      try{if(schedules.tick())void collaboration.flush().catch(()=>{});}catch{/* Schedule work retries on the next tick. */}
       void managers.reconcile().catch(()=>{});
       const pending=store.pending(),ids=new Set(pending.map(c=>c.id));
       for(const id of retryAfter.keys())if(!ids.has(id))retryAfter.delete(id);
@@ -398,6 +401,10 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
       result.hosts[0].resources=local.resources;
       return args.detail===true?result:compactFind(result,args.query??'');
     }
+    if(operation==='schedule')return schedules.create(actor,args);
+    if(operation==='schedules')return schedules.list(actor,{all:args.all===true});
+    if(operation==='schedule-cancel')return schedules.cancel(actor,args);
+    if(operation==='topic-publish')return schedules.publish(actor,args);
     if(operation==='send'){const r=collaboration.send(actor,args);void collaboration.flush().catch(()=>{});return collaboration.sent(actor,r.id);}
     if(operation==='inbox'){
       integer(args.waitMs??0,'waitMs',0,3600000);
@@ -483,7 +490,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
         requireThat(body.args?.from===`${peer.authority}/${body.actor}`,'FORBIDDEN','Sender does not match linked host',403);
         value=collaboration.deliver(body.args);
       }else{
-        requireThat(['capabilities','resources','reserve','reservation','release','renew','start','process','workload-register','workload-launch','workload-list','telemetry','metadata','sessions','session-read','jobs','job','overseer','session-snooze','memories','memory-read'].includes(body.operation),'FORBIDDEN','Operation cannot be forwarded',403);
+        requireThat(['capabilities','resources','reserve','reservation','release','renew','start','process','workload-register','workload-launch','workload-list','telemetry','metadata','sessions','session-read','jobs','job','overseer','session-snooze','memories','memory-read','schedule','schedules','schedule-cancel'].includes(body.operation),'FORBIDDEN','Operation cannot be forwarded',403);
         value=await collaborate(actor,body.operation,body.args);
       }
       store.assertLeader();return {authority:store.authority,value};
@@ -500,7 +507,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     if(url.pathname==='/v1/collaboration'&&req.method==='POST'){
       const body=await readBody(req);
       if(body.host&&body.host!==store.authority){
-        requireThat(['capabilities','resources','reserve','reservation','release','renew','start','process','workload-register','workload-launch','workload-list','telemetry','metadata','sessions','session-read','jobs','job','overseer','session-snooze','memories','memory-read'].includes(body.operation),'FORBIDDEN','Operation cannot be forwarded',403);
+        requireThat(['capabilities','resources','reserve','reservation','release','renew','start','process','workload-register','workload-launch','workload-list','telemetry','metadata','sessions','session-read','jobs','job','overseer','session-snooze','memories','memory-read','schedule','schedules','schedule-cancel'].includes(body.operation),'FORBIDDEN','Operation cannot be forwarded',403);
         return attachWorkloads(await collaboration.forward(body.host,body.operation,body.args,actor),actor,body.operation);
       }
       if(body.operation==='sessions'&&!body.host)return sessionsAcrossHosts(actor,body.args);

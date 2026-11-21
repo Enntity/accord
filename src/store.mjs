@@ -76,7 +76,19 @@ export class Store {
       UPDATE resource_bindings SET registered_at=cast(strftime('%s','now') AS INTEGER)*1000 WHERE registered_at IS NULL;
       ALTER TABLE remote_routes ADD COLUMN retired_at INTEGER;ALTER TABLE remote_routes ADD COLUMN retired_reason TEXT;ALTER TABLE remote_routes ADD COLUMN successor TEXT;
       CREATE TABLE lifecycle_outbox(id INTEGER PRIMARY KEY AUTOINCREMENT,authority TEXT NOT NULL,session_id TEXT NOT NULL,event TEXT NOT NULL,reason TEXT NOT NULL DEFAULT '',successor TEXT NOT NULL DEFAULT '',at INTEGER NOT NULL,payload TEXT NOT NULL,state TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL,last_attempt INTEGER);
-      CREATE UNIQUE INDEX lifecycle_outbox_dedupe ON lifecycle_outbox(authority,session_id,event,reason,at);`]); this.now = now; this.leaderMs = leaderMs;
+      CREATE UNIQUE INDEX lifecycle_outbox_dedupe ON lifecycle_outbox(authority,session_id,event,reason,at);`,
+      // Migration 21: durable scheduled messages. Event triggers watch the
+      // events log through schedule_cursor; pending_events coalesce into one
+      // firing per minute, and the outbox id hash(id:fired_count) keeps a
+      // crash-and-retry from double-sending.
+      `CREATE TABLE schedules(id TEXT PRIMARY KEY, owner TEXT NOT NULL, owner_label TEXT, target TEXT NOT NULL, text TEXT NOT NULL,
+        kind TEXT NOT NULL, delivery TEXT NOT NULL, trigger TEXT NOT NULL, next_at INTEGER, armed INTEGER NOT NULL DEFAULT 1,
+        pending_events INTEGER NOT NULL DEFAULT 0, pending_detail TEXT, last_fired_at INTEGER, fired_count INTEGER NOT NULL DEFAULT 0,
+        max_fires INTEGER, expires_at INTEGER NOT NULL, state TEXT NOT NULL, ended_reason TEXT, last_error TEXT,
+        deferred INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL);
+      CREATE INDEX schedules_due ON schedules(state,next_at);
+      CREATE INDEX schedules_owner ON schedules(owner,state);
+      CREATE TABLE schedule_cursor(id INTEGER PRIMARY KEY CHECK(id=1), event_seq INTEGER NOT NULL);`]); this.now = now; this.leaderMs = leaderMs;
     transaction(this.db, () => {
       this.db.prepare("INSERT OR IGNORE INTO meta VALUES('authority',?)").run(id());
       this.db.prepare("INSERT OR IGNORE INTO meta VALUES('paused','false')").run();
@@ -432,7 +444,8 @@ export class Store {
     const session=this.db.prepare('SELECT min(expires_at) at FROM sessions WHERE closed_at IS NULL').get().at;
     const claim=this.db.prepare("SELECT min(deadline) at FROM claims WHERE state IN ('preparing','running')").get().at;
     const queue=this.db.prepare("SELECT min(r.queued_until) at FROM tasks t JOIN reservations r ON r.task_id=t.id WHERE t.state='queued'").get().at;
-    return Math.min(session??Infinity,claim??Infinity,queue??Infinity);
+    const sched=this.db.prepare("SELECT min(next_at) at FROM schedules WHERE state='active' AND next_at IS NOT NULL").get().at;
+    return Math.min(session??Infinity,claim??Infinity,queue??Infinity,sched??Infinity);
   }
   pending() { return this.db.prepare("SELECT * FROM claims WHERE state IN ('preparing','releasing','revoking') ORDER BY created_at").all(); }
   activated(claimId) {

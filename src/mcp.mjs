@@ -24,6 +24,10 @@ export const toolCatalog = [
   ['accord_announce','Set label, state, location, capabilities and activity.',schema({key,label:string,activity:string,state:{enum:['starting','working','idle','waiting','blocked','done','failed','exited','cancelled','unknown']},location:string,capabilities:{type:'array',items:string,maxItems:20}},['label','activity'])],
   ['accord_find','Find agents and resources before overlapping work.',schema({query:string})],
   ['accord_send','Message a discovered address. Queued does not mean read.',schema({key,to:string,text:string,kind:{enum:['message','notification']},delivery:{enum:['inbox','native-prompt'],description:'Native prompt requests require a compatible adapter and its approval policy; notifications alone never type.'}},['to','text'])],
+  ['accord_schedule','Schedule a message (default: to yourself) at a time, interval or event; wake types it into an idle Tessera agent. Cancel via accord_more schedule-cancel.',schema({key,to:string,text:string,wake:{type:'boolean'},at:{type:'integer'},inMs:{type:'integer'},everyMs:{type:'integer'},startAt:{type:'integer'},on:{type:'object',description:'event trigger: reservation, job, idle or topic'},expiresInMs:{type:'integer'},maxFires:{type:'integer'},host:string},['text'])],
+['accord_schedules','List your schedules; admin passes all.',schema({all:{type:'boolean'},host:string})],
+  ['accord_schedule_cancel','Cancel one of your schedules (admin: any).',schema({id:string,host:string},['id'])],
+  ['accord_publish','Publish a topic event that fires matching schedules; for CI watchers and scripts.',schema({key,topic:string,text:string})],
   ['accord_inbox','Page unread messages; pass cursor for more. Only accord_read acknowledges. Wait up to 20s.',schema({waitMs:{type:'integer',minimum:0,maximum:20000},limit:{type:'integer',minimum:1,maximum:100},cursor:string})],
   ['accord_read','Mark one message handled.',schema({deliveryId:string},['deliveryId'])],
   ['accord_sent','Check whether an outgoing message is queued or delivered to the recipient host.',schema({id:string},['id'])],
@@ -49,7 +53,7 @@ export const toolCatalog = [
   ['accord_finish','Submit a driver receipt for acceptance and confirmed release.',schema({key,claimId:string,receiptId:string},['key','claimId','receiptId'])]
 ].map(([name,description,inputSchema])=>({name,description,inputSchema}));
 // Every session pays for this list before doing anything, so it holds only the daily loop.
-const dailyTools=new Set(['accord_bootstrap','accord_announce','accord_find','accord_send','accord_inbox','accord_read','accord_reserve','accord_reservation','accord_release','accord_extend','accord_resources']);
+const dailyTools=new Set(['accord_bootstrap','accord_announce','accord_find','accord_send','accord_inbox','accord_read','accord_reserve','accord_reservation','accord_release','accord_extend','accord_resources','accord_schedule']);
 const legacyTools=new Set(['accord_claim','accord_wait','accord_claim_status','accord_checkpoint','accord_renew','accord_write','accord_finish','accord_process_start','accord_process_status']);
 const extraTools=()=>toolCatalog.filter(t=>!dailyTools.has(t.name)&&!legacyTools.has(t.name));
 const moreTool={name:'accord_more',description:'Call a less common Accord tool. Omit tool to list them: sessions, reports, jobs, questions, telemetry, workloads.',inputSchema:schema({tool:string,args:{type:'object'}})};
@@ -96,6 +100,10 @@ export function mcpAdapter(profile,{identity=nativeSessionIdentity()}={}) {
       if(name==='accord_announce')return c.announce(args);
       if(name==='accord_find')return compact.find(await c.find(args.query),args.query);
       if(name==='accord_send')return c.send(args.to,args.text,args);
+      if(name==='accord_schedule'){const {host,...body}=args;return compact.schedule(await c.collaborate('schedule',{...body,delivery:args.wake===true?'native-prompt':'inbox'},host));}
+      if(name==='accord_schedules')return compact.schedules(await c.collaborate('schedules',{all:args.all===true},args.host));
+      if(name==='accord_schedule_cancel')return compact.schedule(await c.collaborate('schedule-cancel',{id:args.id},args.host));
+      if(name==='accord_publish')return c.collaborate('topic-publish',{key:args.key??randomUUID(),topic:args.topic,text:args.text});
       if(name==='accord_inbox'){
         requireThat((args.waitMs??0)<=20000,'INVALID_INPUT','MCP wait is limited to 20 seconds',400);
         return c.waitInbox(args.waitMs??0,{limit:args.limit??20,...(args.cursor?{cursor:args.cursor}:{})});

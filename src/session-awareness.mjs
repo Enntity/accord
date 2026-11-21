@@ -901,6 +901,8 @@ export class SessionAwareness {
           now,
           body.reservationId ?? old?.reservation_id ?? null,
         );
+      if (old?.state !== state)
+        this.store.emit("job.updated", { job: jobId, actor: actor.id, state, previous: old?.state ?? null });
       return this.db.prepare("SELECT * FROM agent_jobs WHERE id=?").get(jobId);
     });
   }
