@@ -146,7 +146,7 @@ export class Store {
       this.db.prepare('INSERT INTO sessions(id,label,harness,client,created_at,expires_at,closed_at,persistent) VALUES(?,?,?,?,?,?,NULL,?)').run(sessionId, body.label, body.harness, client ?? null, createdAt, expiresAt,Number(persistent));
       this.emit('session.opened', {session: sessionId, label: body.label, harness: body.harness, expiresAt:persistent?null:expiresAt,persistent});
       return {sessionId, expiresAt:persistent?null:expiresAt, persistent, authority: this.authority};
-    });
+    }, client===undefined ? [] : [request]);
     if(client!==undefined)this.mutate(()=>this.db.prepare('UPDATE sessions SET client=? WHERE id=? AND client IS NOT ?').run(client, opened.sessionId, client));
     return opened;
   }
@@ -296,7 +296,7 @@ export class Store {
     this.db.prepare('UPDATE leader SET until_ms=0 WHERE token=?').run(this.leaderToken);
   }
   emit(kind, data) { this.db.prepare('INSERT INTO events(at,kind,data) VALUES(?,?,?)').run(this.now(), kind, JSON.stringify(data)); this.onEvent?.(); }
-  command(actor, body, operation, fn) {
+  command(actor, body, operation, fn, accepted = []) {
     text(body.key, 'key', 128);
     const fingerprint = hash(JSON.stringify({ operation, body }));
     return this.mutate(() => {
@@ -304,7 +304,7 @@ export class Store {
       requireThat(!session || (session.closed_at === null && session.expires_at > this.now()), 'SESSION_EXPIRED', 'Session ended', 401);
       const prior = this.db.prepare('SELECT * FROM commands WHERE actor=? AND key=?').get(actor.id, body.key);
       if (prior) {
-        requireThat(prior.payload_hash === fingerprint, 'KEY_REUSED', 'Idempotency key has a different payload');
+        requireThat(prior.payload_hash === fingerprint || accepted.some(alt => prior.payload_hash === hash(JSON.stringify({ operation, body: alt }))), 'KEY_REUSED', 'Idempotency key has a different payload');
         return JSON.parse(prior.response);
       }
       const response = fn();

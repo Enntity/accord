@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { Store } from "../src/store.mjs";
+import { hash } from "../src/common.mjs";
 import { Collaboration } from "../src/collaboration.mjs";
 import { SessionAwareness } from "../src/session-awareness.mjs";
 import { participant } from "../src/compact.mjs";
@@ -240,4 +241,14 @@ test("a native bridge that enrolled before client names re-enrolls with the same
   assert.equal(again.sessionId, first.sessionId);
   assert.equal(s.db.prepare("SELECT client FROM sessions WHERE id=?").get(first.sessionId).client, "devin");
   assert.throws(() => s.openSession({ id: "a" }, { ...body, label: "Other" }, () => "native-secret"), { code: "KEY_REUSED" });
+});
+
+test("an enrollment recorded by 0.8.0 with its client name still replays", (t) => {
+  const { s } = fixture(t);
+  const body = { key: "mcp-native:recorded-080", label: "MCP agent", harness: "mcp", authority: s.authority };
+  const first = s.openSession({ id: "a" }, body, () => "native-secret");
+  // 0.8.0 fingerprinted the client name; rewrite the stored hash the way it recorded it.
+  s.db.prepare("UPDATE commands SET payload_hash=? WHERE key=?").run(hash(JSON.stringify({ operation: "session.open", body: { ...body, client: "claude" } })), body.key);
+  assert.equal(s.openSession({ id: "a" }, { ...body, client: "claude" }, () => "native-secret").sessionId, first.sessionId);
+  assert.throws(() => s.openSession({ id: "a" }, body, () => "native-secret"), { code: "KEY_REUSED" });
 });
