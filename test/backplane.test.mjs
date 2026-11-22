@@ -2,6 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { join } from "node:path";
 import { harness, eventually, stop, delay } from "./helpers.mjs";
 import { request, token } from "../src/common.mjs";
 import { AccordClient, withReservation } from "../src/client.mjs";
@@ -225,4 +226,29 @@ test('operator notifications are durable and legacy session bridges are absent',
   assert.equal((await admin.inbox()).messages[0].deliveryId,note.deliveryId);
   for(const operation of ['bridge-send','bridge-ask','bridge-notify','bridge-messages','bridge-read','bridge-import'])
     await assert.rejects(admin.collaborate(operation,{}));
+});
+
+test('bridge-renames drains the rename queue once; bridge-rename-result settles it',async t=>{
+  const h=await harness();t.after(()=>h.close());const admin=h.client('admin'),sender=h.client('agent-a');
+  await admin.collaborate('session-report',{key:'tile',source:'tessera',externalId:'tile-r1',title:'devin',rename:'supported'});
+  const requested=await sender.collaborate('session-title',{key:'name-1',source:'tessera',externalId:'tile-r1',title:'New name'});
+  assert.equal(requested.rename,'requested');
+  // A replayed request returns the same row rather than queueing a second.
+  assert.equal((await sender.collaborate('session-title',{key:'name-1',source:'tessera',externalId:'tile-r1',title:'New name'})).id,requested.id);
+  // Only the host adapter drains the queue.
+  await assert.rejects(sender.collaborate('bridge-renames',{source:'tessera'}),e=>e.code==='FORBIDDEN');
+  const row=(await admin.collaborate('bridge-renames',{source:'tessera'})).renames.find(r=>r.id===requested.id);
+  assert.deepEqual({tile:row.tile,title:row.title,session:row.session}, {tile:'tile-r1',title:'New name',session:requested.session});
+  // It stays pending until the adapter reports the outcome.
+  assert.equal((await admin.collaborate('bridge-renames',{source:'tessera'})).renames.length,1);
+  await assert.rejects(sender.collaborate('bridge-rename-result',{id:requested.id,outcome:'accepted'}),e=>e.code==='FORBIDDEN');
+  assert.deepEqual(await admin.collaborate('bridge-rename-result',{id:requested.id,outcome:'accepted'}),{id:requested.id,state:'accepted'});
+  assert.equal((await admin.collaborate('bridge-renames',{source:'tessera'})).renames.length,0);
+  await assert.rejects(admin.collaborate('bridge-rename-result',{id:requested.id,outcome:'accepted'}),e=>e.code==='NOT_FOUND');
+  // A pending request older than a day fails as expired instead of returning.
+  const {DatabaseSync}=await import('node:sqlite');const db=new DatabaseSync(join(h.data,'coordinator.sqlite'));
+  db.prepare("INSERT INTO rename_requests(id,session,tile,source,title,by,state,created_at,updated_at) VALUES('stale','s','tile-r1','tessera','Old','a','pending',?,?)").run(Date.now()-25*3600000,Date.now());
+  assert.equal((await admin.collaborate('bridge-renames',{source:'tessera'})).renames.length,0);
+  assert.deepEqual({...db.prepare("SELECT state,reason FROM rename_requests WHERE id='stale'").get()},{state:'failed',reason:'expired'});
+  db.close();
 });

@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+- Titles now come from their origin. The agent record's `title` is the linked
+  Tessera tile view's title when the agent has a tile, else its own session
+  view title, else its label, and `titleSource` is always `origin`. The
+  operator/overseer/peer `titles` layers, `givenTitle` and `titledBy` are no
+  longer surfaced or indexed; existing rows are kept, unread.
+- `session-title` now renames at the source: it finds the subject's Tessera
+  tile (a `tessera` view is its own tile) and enqueues a `kind:"rename"`
+  bridge delivery to it, returning `{rename:"requested",...}` and emitting
+  `session.rename-requested`. It refuses with `RENAME_UNSUPPORTED` when there
+  is no tile, when the tile reports `rename:"unsupported"` (the tile's
+  `renameReason` is the message), or when an older Tessera reports no rename
+  field; an empty title is `INVALID_INPUT`. `send` still cannot compose
+  `kind:"rename"`.
+- `session-report` accepts `rename` (`supported`|`unsupported`) and
+  `renameReason` (migration 23), stored on the view so `session-title` can
+  route or refuse.
+
 ## 0.8.1 — 2026-11-20
 
 - Fixed: MCP bridges with a native identity that enrolled before 0.8.0 failed to reconnect with `KEY_REUSED`, because the enrollment now carried the client name. The client name is no longer part of the enrollment's idempotency payload; it is recorded on the session either way.

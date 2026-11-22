@@ -127,9 +127,10 @@ test('MCP names a session through the less common tools',async t=>{
     assert.equal(listedTools().some(t=>t.name==='accord_title'),false);
     assert((await adapter.call('accord_more',{})).tools.some(t=>t.name==='accord_title'));
     const {address}=await adapter.call('accord_bootstrap',{label:'claude',activity:'porting'}),id=address.split('/')[1];
-    assert.equal((await adapter.call('accord_more',{tool:'accord_title',args:{id,title:'GLM port'}})).givenTitle,'GLM port');
+    // No linked Tessera tile reports rename support, so naming is refused at the source.
+    await assert.rejects(adapter.call('accord_more',{tool:'accord_title',args:{id,title:'GLM port'}}),{code:'RENAME_UNSUPPORTED'});
     const listed=(await adapter.call('accord_sessions',{})).sessions.find(s=>s.id===id);
-    assert.deepEqual([listed.title,listed.titledBy],['GLM port',address]);
+    assert.equal(listed.title,'claude');
     await assert.rejects(adapter.call('accord_title',{id}),{code:'INVALID_INPUT'});
   }finally{await adapter.close();if(old)process.env.ACCORD_SESSION_FILE=old;}
 });

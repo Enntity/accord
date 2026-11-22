@@ -43,7 +43,7 @@ test('board history pages retain every task and current view excludes completed 
 });
 test('pending work and queue queries use working-set indexes after an additive upgrade',t=>{
  const {s}=fixture(t),checksums=s.db.prepare('SELECT * FROM migrations WHERE version<=16').all();
- assert.equal(checksums.length,16);assert.equal(s.db.prepare('SELECT count(*) n FROM migrations').get().n,22);
+ assert.equal(checksums.length,16);assert.equal(s.db.prepare('SELECT count(*) n FROM migrations').get().n,23);
  assert.match(s.db.prepare("EXPLAIN QUERY PLAN SELECT * FROM claims WHERE state IN ('preparing','releasing','revoking') ORDER BY created_at").all().map(r=>r.detail).join(' '),/claims_pending/);
  assert.match(s.db.prepare("EXPLAIN QUERY PLAN SELECT * FROM tasks WHERE state='queued' ORDER BY created_at,rowid").all().map(r=>r.detail).join(' '),/tasks_queued/);
 });

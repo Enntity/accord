@@ -85,9 +85,9 @@ test('the find bound also covers pools, and counts what it dropped',()=>{
   assert(Buffer.byteLength(JSON.stringify(view))<=8192);assert.equal(view.pools.length+view.moreResources,800);
 });
 
-test('a given session title is the one an agent reads, with who gave it',()=>{
+test('the compact session title is the origin’s own',()=>{
   const row=(id,extra={})=>({id,address:'h/'+id,title:'claude',state:'working',summary:'',location:'',presence:'recent',source:'agent',progressAt:1,...extra});
-  const view=sessions({sessions:[row('a',{givenTitle:'GLM port',titledBy:'h/b',titledAt:5}),row('c')]});
-  assert.deepEqual([view.sessions[0].title,view.sessions[0].titledBy],['GLM port','h/b']);
-  assert.equal(view.sessions[1].title,'claude');assert.equal('titledBy' in view.sessions[1],false);
+  const view=sessions({sessions:[row('a'),row('c',{title:'GLM port'})]});
+  assert.equal(view.sessions[0].title,'claude');
+  assert.equal(view.sessions[1].title,'GLM port');assert.equal('titledBy' in view.sessions[1],false);
 });

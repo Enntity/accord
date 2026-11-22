@@ -20,7 +20,7 @@ and a queue, so you can stop carrying updates between terminals.
 **0.8.1:** a fix for `KEY_REUSED` on native-bridge reconnect after upgrading
 to 0.8.0. 0.8.0 added durable scheduled messages delivered from the
 `accord-scheduler` principal, workload observations on resources, and one agent
-record per participant — layered titles, tile links and client names.
+record per participant — origin titles, tile links and client names.
 [Release notes](CHANGELOG.md) · [Upgrading](docs/UPGRADING.md)
 
 ## Get started
