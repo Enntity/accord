@@ -99,7 +99,10 @@ export class Store {
       CREATE TABLE agent_tiles(actor TEXT PRIMARY KEY REFERENCES actors(id), tile TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN('agent','nested')), linked_at INTEGER NOT NULL);
       CREATE INDEX agent_tiles_tile ON agent_tiles(tile);
       CREATE TABLE titles(subject TEXT NOT NULL, layer TEXT NOT NULL CHECK(layer IN('operator','overseer','peer')), title TEXT NOT NULL, by TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY(subject,layer));
-      INSERT INTO titles(subject,layer,title,by,at) SELECT id,'peer',given_title,coalesce(titled_by,''),coalesce(titled_at,0) FROM session_views WHERE given_title IS NOT NULL;`]); this.now = now; this.leaderMs = leaderMs;
+      INSERT INTO titles(subject,layer,title,by,at) SELECT id,'peer',given_title,coalesce(titled_by,''),coalesce(titled_at,0) FROM session_views WHERE given_title IS NOT NULL;`,
+      // Migration 23: rename support reported per tile. NULL means the
+      // reporting Tessera predates renames; old titles rows stay, unread.
+      "ALTER TABLE session_views ADD COLUMN rename TEXT;ALTER TABLE session_views ADD COLUMN rename_reason TEXT;"]); this.now = now; this.leaderMs = leaderMs;
     transaction(this.db, () => {
       this.db.prepare("INSERT OR IGNORE INTO meta VALUES('authority',?)").run(id());
       this.db.prepare("INSERT OR IGNORE INTO meta VALUES('paused','false')").run();

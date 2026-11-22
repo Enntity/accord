@@ -203,7 +203,7 @@ export class Collaboration {
     if(retired)throw this.retiredError(retired);
     const from=this.principal(envelope.from),to=this.principal(envelope.to);
     const conversation=this.messages.createConversation(from,{members:[to.handle]});
-    this.messages.sendMessage(from,{conversationId:conversation.id,clientMessageId:envelope.id,body:envelope.text,data:{id:envelope.id,from:envelope.from,to:envelope.to,kind:envelope.kind,delivery:envelope.delivery==='native-prompt'?'native-prompt':'inbox',...(envelope.scheduledBy?{scheduledBy:envelope.scheduledBy}:{}),...(envelope.scheduleId?{scheduleId:envelope.scheduleId}:{})}});
+    this.messages.sendMessage(from,{conversationId:conversation.id,clientMessageId:envelope.id,body:envelope.text,data:{id:envelope.id,from:envelope.from,to:envelope.to,kind:envelope.kind,delivery:envelope.delivery==='native-prompt'?'native-prompt':'inbox',...(envelope.title!==undefined?{title:envelope.title}:{}),...(envelope.scheduledBy?{scheduledBy:envelope.scheduledBy}:{}),...(envelope.scheduleId?{scheduleId:envelope.scheduleId}:{})}});
     try{this.onDeliver?.(recipient);}catch{/* A delivered message stays delivered if its hint fails. */}
     return {id:envelope.id,state:'delivered'};
   }

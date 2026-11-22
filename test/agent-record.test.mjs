@@ -90,48 +90,88 @@ test("enrollment records the client name", async (t) => {
   store.close();
 });
 
-test("title layers attribute operator, overseer and peer, and clearing removes one layer", (t) => {
+const reportTile = (f, extra = {}) =>
+  f.v.report(f.admin, { key: `tile:${++serial}`, source: "tessera", externalId: "tile-1", title: "Tile name", state: "idle", ...extra });
+const tileView = (f, externalId = "tile-1") =>
+  f.s.db.prepare("SELECT * FROM session_views WHERE source='tessera' AND external_id=?").get(externalId);
+
+test("the agent title comes from its origin: tile view, own view, then label", (t) => {
   const f = fixture(t);
   const subject = f.enroll("Subject");
-  f.v.title(f.admin, { key: "t1", id: subject, title: "Ops name" });
-  f.v.designate(f.admin, { key: "d1", address: f.addr("a") });
-  f.v.title(f.a, { key: "t2", id: subject, title: "Overseer name" });
-  f.v.title(f.b, { key: "t3", id: subject, title: "Peer name" });
-  const layers = Object.fromEntries(
-    f.s.db.prepare("SELECT layer,title FROM titles WHERE subject=?").all(subject).map((r) => [r.layer, r.title]));
-  assert.deepEqual(layers, { operator: "Ops name", overseer: "Overseer name", peer: "Peer name" });
-  // Operator wins, even though the overseer and peers named it too.
-  let effective = f.v.agentRecord(subject);
-  assert.equal(effective.title, "Ops name");
-  assert.equal(effective.titleSource, "operator");
-  // Clearing removes only the caller's layer.
-  f.v.title(f.admin, { key: "t4", id: subject, title: "" });
-  effective = f.v.agentRecord(subject);
-  assert.equal(effective.title, "Overseer name");
-  assert.equal(effective.titleSource, "overseer");
-  f.v.title(f.a, { key: "t5", id: subject, title: "" });
-  // With operator and overseer cleared, a default label falls through to peer.
-  effective = f.v.agentRecord(subject);
-  assert.equal(effective.title, "Peer name");
-  assert.equal(effective.titleSource, "peer");
-  const emitted = f.s.db.prepare("SELECT data FROM events WHERE kind='session.titled' ORDER BY seq DESC LIMIT 1").get();
-  assert.equal(JSON.parse(emitted.data).layer, "overseer");
-});
-
-test("a non-default label outranks peer but loses to overseer and operator", (t) => {
-  const f = fixture(t);
-  const subject = f.enroll("Sub");
   f.c.announce({ id: subject, role: "worker" }, { key: "ann", label: "Sub", activity: "working" });
-  f.v.title(f.b, { key: "t1", id: subject, title: "Peer name" });
+  // No tile and no own view yet: the announced label is the origin title.
   let record = f.v.agentRecord(subject);
   assert.equal(record.title, "Sub");
-  assert.equal(record.titleSource, "agent");
-  assert.equal(record.titles.agent.title, "Sub");
-  f.v.designate(f.admin, { key: "d1", address: f.addr("a") });
-  f.v.title(f.a, { key: "t2", id: subject, title: "Overseer name" });
+  assert.equal(record.titleSource, "origin");
+  assert.equal(record.titles, undefined);
+  // The agent's own session view title beats the label.
+  f.v.report({ id: subject, role: "worker" }, { key: "own", title: "Own report title", state: "working" });
   record = f.v.agentRecord(subject);
-  assert.equal(record.title, "Overseer name");
-  assert.equal(record.titleSource, "overseer");
+  assert.equal(record.title, "Own report title");
+  // Linked to a tile, the tile view's title wins.
+  reportTile(f, { rename: "supported" });
+  f.s.db.prepare("INSERT INTO agent_tiles VALUES(?,?,?,?)").run(subject, "tile-1", "agent", f.s.now());
+  record = f.v.agentRecord(subject);
+  assert.equal(record.title, "Tile name");
+  assert.equal(record.titleSource, "origin");
+});
+
+test("a rename request goes to the subject's tile as a kind rename delivery", async (t) => {
+  const f = fixture(t);
+  const subject = f.enroll("Subject");
+  reportTile(f, { rename: "supported" });
+  f.s.db.prepare("INSERT INTO agent_tiles VALUES(?,?,?,?)").run(subject, "tile-1", "agent", f.s.now());
+  const result = f.v.title(f.b, { key: "t1", id: subject, title: "Better name" });
+  assert.deepEqual(result, { rename: "requested", tile: "tile-1", title: "Better name", session: subject });
+  const event = JSON.parse(f.s.db.prepare("SELECT data FROM events WHERE kind='session.rename-requested'").get().data);
+  assert.deepEqual({ tile: event.tile, title: event.title }, { tile: "tile-1", title: "Better name" });
+  // The delivery reaches the tile's bridge inbox with kind rename and data.title.
+  await f.c.flush();
+  const view = tileView(f);
+  const { messages } = f.c.inbox({ id: view.id, role: "worker" });
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].kind, "rename");
+  assert.equal(messages[0].title, "Better name");
+  // accord_send still cannot compose kind rename: the kind is coerced.
+  f.c.send(f.b, { key: "s1", to: `${f.s.authority}/${view.id}`, text: "hi", kind: "rename" });
+  await f.c.flush();
+  assert.equal(f.c.inbox({ id: view.id, role: "worker" }).messages.at(-1).kind, "message");
+});
+
+test("session-title refuses when no tile, unsupported, older Tessera, or empty", (t) => {
+  const f = fixture(t);
+  const subject = f.enroll("Subject");
+  // No tile: the agent source has no supported rename through Accord.
+  assert.throws(() => f.v.title(f.b, { key: "t1", id: subject, title: "Name" }),
+    { code: "RENAME_UNSUPPORTED", message: "This source can't be renamed: agent sessions have no supported rename through Accord." });
+  // The tile reports rename unsupported; Tessera's reason is the message.
+  reportTile(f, { rename: "unsupported", renameReason: "This source can't be renamed: zcode keeps its own title." });
+  f.s.db.prepare("INSERT INTO agent_tiles VALUES(?,?,?,?)").run(subject, "tile-1", "agent", f.s.now());
+  assert.throws(() => f.v.title(f.b, { key: "t2", id: subject, title: "Name" }),
+    { code: "RENAME_UNSUPPORTED", message: "This source can't be renamed: zcode keeps its own title." });
+  // An older Tessera reports no rename field at all.
+  f.s.db.prepare("UPDATE session_views SET rename=NULL,rename_reason=NULL WHERE source='tessera'").run();
+  assert.throws(() => f.v.title(f.b, { key: "t3", id: subject, title: "Name" }),
+    { code: "RENAME_UNSUPPORTED", message: "Tessera on this host can't rename sources yet." });
+  // A name can't be removed at the source.
+  f.s.db.prepare("UPDATE session_views SET rename='supported' WHERE source='tessera'").run();
+  assert.throws(() => f.v.title(f.b, { key: "t4", id: subject, title: "  " }),
+    { code: "INVALID_INPUT", message: "A name can't be removed at the source; give a new name." });
+  assert.throws(() => f.v.title(f.b, { key: "t5", id: subject, title: "x".repeat(121) }), { code: "INVALID_INPUT" });
+  assert.throws(() => f.v.title(f.b, { key: "t6", id: "nobody", title: "x" }), { code: "NOT_FOUND" });
+});
+
+test("session-report stores rename support and reason on the tile view", (t) => {
+  const f = fixture(t);
+  reportTile(f, { rename: "unsupported", renameReason: "zcode keeps its own title." });
+  assert.deepEqual(
+    tileView(f).rename && tileView(f).rename_reason ? [tileView(f).rename, tileView(f).rename_reason] : null,
+    ["unsupported", "zcode keeps its own title."]);
+  // A report without rename leaves the stored fields alone.
+  reportTile(f);
+  assert.equal(tileView(f).rename, "unsupported");
+  assert.throws(() => reportTile(f, { rename: "maybe" }), { code: "INVALID_INPUT" });
+  assert.throws(() => reportTile(f, { rename: "unsupported", renameReason: "x".repeat(201) }), { code: "INVALID_INPUT" });
 });
 
 test("the agent record carries task, previous addresses and the mailbox binding", (t) => {
@@ -164,7 +204,7 @@ test("compact participant shows title, client, tile and task", (t) => {
   assert.equal(participant({ address: "h/s2", label: "Same", agent: { title: "Same" } }).title, undefined);
 });
 
-test("an upgrade copies given titles into the peer layer and keeps givenTitle", (t) => {
+test("an upgrade still copies given titles into titles rows, now unread", (t) => {
   const dir = mkdtempSync(join(tmpdir(), "accord-agent-upg-"));
   const file = join(dir, "coordinator.sqlite");
   const seed = new Store(file);
@@ -173,19 +213,20 @@ test("an upgrade copies given titles into the peer layer and keeps givenTitle", 
     VALUES('v1','a','agent','observed','working','','',0,1,1,1,1,'f','', 'extractive',1,NULL,0,'Old peer name','admin',7)`).run();
   seed.close();
   const old = new DatabaseSync(file);
-  old.exec("ALTER TABLE sessions DROP COLUMN client; DROP TABLE agent_tiles; DROP TABLE titles; DELETE FROM migrations WHERE version>=22");
+  old.exec("ALTER TABLE sessions DROP COLUMN client; DROP TABLE agent_tiles; DROP TABLE titles; ALTER TABLE session_views DROP COLUMN rename; ALTER TABLE session_views DROP COLUMN rename_reason; DELETE FROM migrations WHERE version>=22");
   old.close();
   const s = new Store(file);
   t.after(() => { s.close(); rmSync(dir, { recursive: true, force: true }); });
+  // The historical migration is unchanged: old names survive as data.
   const layer = { ...s.db.prepare("SELECT layer,title,by,at FROM titles WHERE subject='v1'").get() };
   assert.deepEqual(layer, { layer: "peer", title: "Old peer name", by: "admin", at: 7 });
+  // Nothing surfaces them: the agent title is the origin's own.
   const aw = new SessionAwareness(s);
   const pub = aw.public(s.db.prepare("SELECT * FROM session_views WHERE id='v1'").get());
-  assert.equal(pub.givenTitle, "Old peer name");
-  assert.equal(pub.titledBy, `${s.authority}/admin`);
-  assert.equal(pub.titledAt, 7);
-  assert.equal(pub.agent.title, "Old peer name");
-  assert.equal(pub.agent.titleSource, "peer");
+  assert.equal(pub.givenTitle, undefined);
+  assert.equal(pub.titledBy, undefined);
+  assert.equal(pub.agent.title, "observed");
+  assert.equal(pub.agent.titleSource, "origin");
 });
 
 test("a host without session-link-tile never fails enrollment; a failed bind still reports", async (t) => {

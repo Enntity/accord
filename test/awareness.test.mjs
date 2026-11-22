@@ -438,57 +438,46 @@ test('parent relationships are observer-owned and disappear with private content
  f.report(f.admin,{source:'codex',externalId:'child',private:true});
  assert.equal(f.v.public(f.v.row(row.id)).parentSession,undefined);
 });
-test('a given title is attributed display metadata that outlives the owner’s reports and never touches private content',t=>{
+test('session-title renames at the origin and refuses what the source cannot rename',t=>{
   const f=fixture(t);
-  const own=f.report(f.a,{title:'claude',detail:'porting the tokenizer'});
-  f.report(f.admin,{source:'tessera',externalId:'tile-1',title:'devin'});
-  // Any participant may name a session; the owner's title stays and the namer is recorded.
-  const named=f.v.title(f.b,{key:'t1',id:'a',title:'  GLM  port:\n tokenizer '});
-  assert.equal(named.title,'claude');assert.equal(named.givenTitle,'GLM port: tokenizer');
-  assert.equal(named.titledBy,`${f.s.authority}/b`);assert.equal(named.titledAt,f.now());
-  // A name is not progress.
-  assert.equal(named.revision,own.revision);assert.equal(named.progressAt,own.progressAt);
-  // A host adapter's session is named by the identity its adapter reports.
-  const tile=f.v.title(f.b,{key:'t2',source:'tessera',externalId:'tile-1',title:'Hardware tests'});
-  assert.equal(tile.externalId,'tile-1');assert.equal(tile.givenTitle,'Hardware tests');
-  f.advance(1000);f.report(f.a,{title:'claude',detail:'now on the sampler'});
-  assert.equal(f.v.list().sessions.find(s=>s.id==='a').givenTitle,'GLM port: tokenizer');
-  assert.deepEqual(f.v.list({query:'GLM'}).sessions.map(s=>s.id),['a']);
-  assert.equal(f.v.title(f.b,{key:'t3',id:'a',title:'key sk-proj-abcdefghijklmnopqrst'}).givenTitle,'key [secret]');
-  // An empty title removes the name and its attribution.
-  const cleared=f.v.title(f.a,{key:'t4',id:'a',title:''});
-  for(const field of ['givenTitle','titledBy','titledAt'])assert.equal(field in cleared,false);
-  assert.deepEqual(f.v.list({query:'secret'}).sessions,[]);
-  assert.throws(()=>f.v.title(f.b,{key:'t5',id:'a',title:'x'.repeat(121)}),{code:'INVALID_INPUT'});
-  assert.throws(()=>f.v.title(f.b,{key:'t6',id:'nobody',title:'x'}),{code:'NOT_FOUND'});
-  assert.throws(()=>f.v.title(f.b,{key:'t7',source:'tessera',externalId:'none',title:'x'}),{code:'NOT_FOUND'});
-  assert.throws(()=>f.v.title(f.b,{key:'t8',title:'x'}),{code:'INVALID_INPUT'});
-  assert.throws(()=>f.v.title(f.b,{key:'t9',id:'a',source:'tessera',externalId:'tile-1',title:'x'}),{code:'INVALID_INPUT'});
-  // Private content takes the name with it, and a private session cannot be named.
-  f.v.title(f.b,{key:'t10',id:'a',title:'Named'});
+  f.report(f.a,{title:'claude',detail:'porting the tokenizer'});
+  f.report(f.admin,{source:'tessera',externalId:'tile-1',title:'devin',rename:'supported'});
+  // A rename request is queued for the tile, not progress and not a stored title.
+  const requested=f.v.title(f.b,{key:'t1',source:'tessera',externalId:'tile-1',title:'Hardware tests'});
+  const tileId=f.s.db.prepare("SELECT id FROM session_views WHERE source='tessera' AND external_id='tile-1'").get().id;
+  assert.deepEqual(requested,{rename:'requested',tile:'tile-1',title:'Hardware tests',session:tileId});
+  const emitted=JSON.parse(f.s.db.prepare("SELECT data FROM events WHERE kind='session.rename-requested'").get().data);
+  assert.equal(emitted.tile,'tile-1');
+  // The view keeps the origin's own title until the origin reports the new one.
+  assert.equal(f.v.list().sessions.find(s=>s.externalId==='tile-1').title,'devin');
+  // Resolution and validation still hold.
+  assert.throws(()=>f.v.title(f.b,{key:'t2',id:'nobody',title:'x'}),{code:'NOT_FOUND'});
+  assert.throws(()=>f.v.title(f.b,{key:'t3',source:'tessera',externalId:'none',title:'x'}),{code:'NOT_FOUND'});
+  assert.throws(()=>f.v.title(f.b,{key:'t4',title:'x'}),{code:'INVALID_INPUT'});
+  assert.throws(()=>f.v.title(f.b,{key:'t5',id:'a',source:'tessera',externalId:'tile-1',title:'x'}),{code:'INVALID_INPUT'});
+  assert.throws(()=>f.v.title(f.b,{key:'t6',id:'a',title:'x'.repeat(121)}),{code:'INVALID_INPUT'});
+  // A private session cannot be renamed through Accord.
   f.report(f.a,{private:true});
-  assert.equal(f.v.row('a').given_title,null);assert.equal('givenTitle' in f.v.public(f.v.row('a')),false);
-  assert.throws(()=>f.v.title(f.b,{key:'t11',id:'a',title:'x'}),{code:'PRIVATE_SESSION'});
-  f.v.privacy(f.admin,{key:'p',source:'tessera',private:true});
-  assert.equal(f.v.row(tile.id).given_title,null);
+  assert.throws(()=>f.v.title(f.b,{key:'t7',id:'a',title:'x'}),{code:'PRIVATE_SESSION'});
   f.v.hideInternal('tessera','tile-1');
-  assert.throws(()=>f.v.title(f.b,{key:'t12',id:tile.id,title:'x'}),{code:'NOT_FOUND'});
+  assert.throws(()=>f.v.title(f.b,{key:'t8',source:'tessera',externalId:'tile-1',title:'x'}),{code:'NOT_FOUND'});
 });
 test('an adapter reads back every session it reported, however long since the last progress',t=>{
   const f=fixture(t);
-  f.report(f.admin,{source:'tessera',externalId:'old-tile',title:'devin'});
+  f.report(f.admin,{source:'tessera',externalId:'old-tile',title:'devin',rename:'supported'});
   f.report(f.admin,{source:'tessera',externalId:'closed-tile',title:'Closed native session',state:'exited'});
   f.advance(1000);
   for(let n=0;n<3;n++){s_(f,n);}
-  f.v.title(f.b,{key:'name',source:'tessera',externalId:'old-tile',title:'Hardware tests'});
-  // The recent list is bounded by progress, and a name is not progress.
+  // A rename request is queued for the tile; the shown title stays the origin's
+  // until the origin reports the new one, and a request is not progress.
+  assert.equal(f.v.title(f.b,{key:'name',source:'tessera',externalId:'old-tile',title:'Hardware tests'}).rename,'requested');
   assert.equal(f.v.list({limit:2}).sessions.some(s=>s.externalId==='old-tile'),false);
   // An exited report retires its observation; the adapter still reads it back with includeRetired.
   const own=f.v.list({source:'tessera',limit:2,includeRetired:true}).sessions;
-  assert.deepEqual(own.map(s=>[s.externalId,s.givenTitle]),[['old-tile','Hardware tests'],['closed-tile',undefined]]);
+  assert.deepEqual(own.map(s=>[s.externalId,s.title]),[['old-tile','devin'],['closed-tile','Closed native session']]);
   assert.equal(own.find(s=>s.externalId==='closed-tile').lifecycle,'retired');
   assert.equal(f.v.list({source:'tessera',limit:2}).sessions.some(s=>s.externalId==='closed-tile'),false);
-  assert.deepEqual(f.v.list({source:'tessera',query:'Hardware'}).sessions.map(s=>s.externalId),['old-tile']);
+  assert.deepEqual(f.v.list({source:'tessera',query:'devin'}).sessions.map(s=>s.externalId),['old-tile']);
   assert.deepEqual(f.v.list({source:'nobody'}).sessions,[]);
   assert.throws(()=>f.v.list({source:''}),{code:'INVALID_INPUT'});
 });
