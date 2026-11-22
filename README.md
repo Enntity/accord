@@ -29,7 +29,7 @@ You need Node.js 22.16 or newer. macOS and Linux support automatic service setup
 On Windows, run `accord up` under your own supervisor after installation.
 
 ```sh
-npm install -g https://github.com/Enntity/accord/releases/download/v0.8.1/enntity-accord-0.8.1.tgz
+npm install -g https://github.com/Enntity/accord/releases/download/v0.9.0/enntity-accord-0.9.0.tgz
 accord install
 ```
 

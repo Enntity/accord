@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.9.0 — 2026-11-22
 
 - Titles now come from their origin. The agent record's `title` is the linked
   Tessera tile view's title when the agent has a tile, else its own session
@@ -8,13 +8,16 @@
   operator/overseer/peer `titles` layers, `givenTitle` and `titledBy` are no
   longer surfaced or indexed; existing rows are kept, unread.
 - `session-title` now renames at the source: it finds the subject's Tessera
-  tile (a `tessera` view is its own tile) and enqueues a `kind:"rename"`
-  bridge delivery to it, returning `{rename:"requested",...}` and emitting
-  `session.rename-requested`. It refuses with `RENAME_UNSUPPORTED` when there
-  is no tile, when the tile reports `rename:"unsupported"` (the tile's
-  `renameReason` is the message), or when an older Tessera reports no rename
-  field; an empty title is `INVALID_INPUT`. `send` still cannot compose
-  `kind:"rename"`.
+  tile (a `tessera` view is its own tile) and inserts a pending row into the
+  new `rename_requests` queue, returning `{rename:"requested", id, ...}`.
+  Admin-only `bridge-renames {source}` hands pending requests to the tile's
+  source (newest first, ≤50, expiring after 24 h) and
+  `bridge-rename-result {id, outcome, reason?}` settles each one, emitting
+  `session.rename-accepted` or `session.rename-failed`. `session-title`
+  refuses with `RENAME_UNSUPPORTED` when there is no tile, when the tile
+  reports `rename:"unsupported"` (the tile's `renameReason` is the message),
+  or when an older Tessera reports no rename field; an empty title is
+  `INVALID_INPUT`. `send` still cannot compose `kind:"rename"`.
 - `session-report` accepts `rename` (`supported`|`unsupported`) and
   `renameReason` (migration 23), stored on the view so `session-title` can
   route or refuse.
