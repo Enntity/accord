@@ -102,7 +102,11 @@ export class Store {
       INSERT INTO titles(subject,layer,title,by,at) SELECT id,'peer',given_title,coalesce(titled_by,''),coalesce(titled_at,0) FROM session_views WHERE given_title IS NOT NULL;`,
       // Migration 23: rename support reported per tile. NULL means the
       // reporting Tessera predates renames; old titles rows stay, unread.
-      "ALTER TABLE session_views ADD COLUMN rename TEXT;ALTER TABLE session_views ADD COLUMN rename_reason TEXT;"]); this.now = now; this.leaderMs = leaderMs;
+      // rename_requests is the dedicated queue a tile's adapter drains with
+      // bridge-renames and settles with bridge-rename-result; it is not mail.
+      `ALTER TABLE session_views ADD COLUMN rename TEXT;ALTER TABLE session_views ADD COLUMN rename_reason TEXT;
+      CREATE TABLE rename_requests(id TEXT PRIMARY KEY, session TEXT NOT NULL, tile TEXT NOT NULL, source TEXT NOT NULL, title TEXT NOT NULL, by TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN('pending','accepted','failed')), reason TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+      CREATE INDEX rename_requests_pending ON rename_requests(state,source,created_at);`]); this.now = now; this.leaderMs = leaderMs;
     transaction(this.db, () => {
       this.db.prepare("INSERT OR IGNORE INTO meta VALUES('authority',?)").run(id());
       this.db.prepare("INSERT OR IGNORE INTO meta VALUES('paused','false')").run();

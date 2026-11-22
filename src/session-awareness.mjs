@@ -57,7 +57,6 @@ export function redact(value) {
     );
 }
 const terminal = new Set(["done", "failed", "exited", "cancelled"]);
-const DEFAULT_LABELS = new Set(['MCP agent', 'shell agent', 'agent']);
 // A live MCP session heartbeats every 30 s and observers stop reading transcripts this
 // old, so a session silent this long has nobody left to report for it.
 export const staleSessionMs = 36 * 3600000;
@@ -450,6 +449,9 @@ export class SessionAwareness {
           .run(body.rename, body.renameReason ?? null, session);
       if(privacy) {
         this.db.prepare('UPDATE session_views SET given_title=NULL,titled_by=NULL,titled_at=NULL WHERE id=?').run(session);
+        // Stale layered names of a session that went private are deleted even
+        // though nothing reads them any more.
+        this.db.prepare('DELETE FROM titles WHERE subject=?').run(session);
       }
       if(body.parentSession !== undefined || privacy) this.db.prepare('UPDATE session_views SET parent_session=? WHERE id=?').run(privacy||!body.parentSession?null:JSON.stringify({source:body.parentSession.source,externalId:body.parentSession.externalId}),session);
       if (privacy) {
@@ -555,6 +557,7 @@ export class SessionAwareness {
               "UPDATE overseer_incidents SET state='resolved',evidence='{}' WHERE session_id=?",
             )
             .run(row.id);
+          this.db.prepare("DELETE FROM titles WHERE subject=?").run(row.id);
           this.index(row.id);
         }
       }
@@ -921,17 +924,16 @@ export class SessionAwareness {
     requireThat(tileView.rename === "supported", "RENAME_UNSUPPORTED",
       reason.startsWith("This source") ? reason : `This source can't be renamed: ${reason || "the origin has no supported rename."}`, 409);
     return this.store.command(actor, body, "session.title", () => {
-      // A rename delivery is not mail a caller could compose: only this
-      // operation enqueues kind "rename", inside the same transaction.
-      const deliveryId = id();
-      this.db.prepare("INSERT INTO message_outbox(id,actor,envelope,state,error,created_at) VALUES(?,?,?,'queued',NULL,?)")
-        .run(deliveryId, actor.id, JSON.stringify({
-          id: deliveryId, from: `${this.store.authority}/${actor.id}`,
-          to: `${this.store.authority}/${tileView.id}`,
-          text: `Rename to “${given}”`, kind: "rename", title: given, delivery: "inbox",
-        }), this.store.now());
-      this.store.emit("session.rename-requested", { session: subject, tile: tileView.external_id, title: given, by: actor.id });
-      return { rename: "requested", tile: tileView.external_id, title: given, session: subject };
+      // A rename request is not mail a caller could compose: only this
+      // operation enqueues one, inside the same transaction. The tile's
+      // adapter drains it through bridge-renames and settles it through
+      // bridge-rename-result.
+      const requestId = id();
+      this.db
+        .prepare("INSERT INTO rename_requests(id,session,tile,source,title,by,state,created_at,updated_at) VALUES(?,?,?,?,?,?,'pending',?,?)")
+        .run(requestId, subject, tileView.external_id, tileView.source, given, `${this.store.authority}/${actor.id}`, this.store.now(), this.store.now());
+      this.store.emit("session.rename-requested", { request: requestId, session: subject, tile: tileView.external_id, title: given, by: actor.id });
+      return { rename: "requested", id: requestId, tile: tileView.external_id, title: given, session: subject };
     });
   }
   snooze(actor, body) {

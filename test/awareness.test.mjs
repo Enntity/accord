@@ -445,7 +445,11 @@ test('session-title renames at the origin and refuses what the source cannot ren
   // A rename request is queued for the tile, not progress and not a stored title.
   const requested=f.v.title(f.b,{key:'t1',source:'tessera',externalId:'tile-1',title:'Hardware tests'});
   const tileId=f.s.db.prepare("SELECT id FROM session_views WHERE source='tessera' AND external_id='tile-1'").get().id;
-  assert.deepEqual(requested,{rename:'requested',tile:'tile-1',title:'Hardware tests',session:tileId});
+  assert.equal(requested.rename,'requested');
+  assert.equal(requested.tile,'tile-1');
+  assert.equal(requested.title,'Hardware tests');
+  assert.equal(requested.session,tileId);
+  assert.equal(typeof requested.id,'string');
   const emitted=JSON.parse(f.s.db.prepare("SELECT data FROM events WHERE kind='session.rename-requested'").get().data);
   assert.equal(emitted.tile,'tile-1');
   // The view keeps the origin's own title until the origin reports the new one.

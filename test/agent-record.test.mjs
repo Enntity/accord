@@ -116,22 +116,32 @@ test("the agent title comes from its origin: tile view, own view, then label", (
   assert.equal(record.titleSource, "origin");
 });
 
-test("a rename request goes to the subject's tile as a kind rename delivery", async (t) => {
+test("a rename request is queued for the subject's tile, not sent as mail", async (t) => {
   const f = fixture(t);
   const subject = f.enroll("Subject");
   reportTile(f, { rename: "supported" });
   f.s.db.prepare("INSERT INTO agent_tiles VALUES(?,?,?,?)").run(subject, "tile-1", "agent", f.s.now());
   const result = f.v.title(f.b, { key: "t1", id: subject, title: "Better name" });
-  assert.deepEqual(result, { rename: "requested", tile: "tile-1", title: "Better name", session: subject });
+  assert.equal(result.rename, "requested");
+  assert.equal(result.tile, "tile-1");
+  assert.equal(result.title, "Better name");
+  assert.equal(result.session, subject);
+  assert.equal(typeof result.id, "string");
   const event = JSON.parse(f.s.db.prepare("SELECT data FROM events WHERE kind='session.rename-requested'").get().data);
   assert.deepEqual({ tile: event.tile, title: event.title }, { tile: "tile-1", title: "Better name" });
-  // The delivery reaches the tile's bridge inbox with kind rename and data.title.
-  await f.c.flush();
+  // The request waits in its own queue for the tile's adapter to drain; the
+  // tile's ordinary inbox stays empty.
+  const row = f.s.db.prepare("SELECT * FROM rename_requests WHERE id=?").get(result.id);
+  assert.equal(row.state, "pending");
+  assert.equal(row.session, subject);
+  assert.equal(row.source, "tessera");
+  assert.equal(row.title, "Better name");
   const view = tileView(f);
   const { messages } = f.c.inbox({ id: view.id, role: "worker" });
-  assert.equal(messages.length, 1);
-  assert.equal(messages[0].kind, "rename");
-  assert.equal(messages[0].title, "Better name");
+  assert.equal(messages.length, 0);
+  // A replayed request returns the stored response, not a second queue row.
+  assert.deepEqual(f.v.title(f.b, { key: "t1", id: subject, title: "Better name" }), result);
+  assert.equal(f.s.db.prepare("SELECT count(*) n FROM rename_requests").get().n, 1);
   // accord_send still cannot compose kind rename: the kind is coerced.
   f.c.send(f.b, { key: "s1", to: `${f.s.authority}/${view.id}`, text: "hi", kind: "rename" });
   await f.c.flush();
@@ -213,7 +223,7 @@ test("an upgrade still copies given titles into titles rows, now unread", (t) =>
     VALUES('v1','a','agent','observed','working','','',0,1,1,1,1,'f','', 'extractive',1,NULL,0,'Old peer name','admin',7)`).run();
   seed.close();
   const old = new DatabaseSync(file);
-  old.exec("ALTER TABLE sessions DROP COLUMN client; DROP TABLE agent_tiles; DROP TABLE titles; ALTER TABLE session_views DROP COLUMN rename; ALTER TABLE session_views DROP COLUMN rename_reason; DELETE FROM migrations WHERE version>=22");
+  old.exec("ALTER TABLE sessions DROP COLUMN client; DROP TABLE agent_tiles; DROP TABLE titles; ALTER TABLE session_views DROP COLUMN rename; ALTER TABLE session_views DROP COLUMN rename_reason; DROP TABLE rename_requests; DELETE FROM migrations WHERE version>=22");
   old.close();
   const s = new Store(file);
   t.after(() => { s.close(); rmSync(dir, { recursive: true, force: true }); });
