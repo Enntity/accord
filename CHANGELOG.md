@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.10.0 — 2026-11-23
 
 - Tile agent resolution: `bridge-inbox` for `tessera` observations now serves
   the tile's live agent — the `tessera:<tile>` binding's actor followed
