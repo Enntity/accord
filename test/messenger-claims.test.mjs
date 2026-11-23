@@ -42,7 +42,6 @@ async function messenger(t, dir) {
     }
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  t.after(() => new Promise(resolve => { server.close(resolve); store.close?.(); }));
   const builder = store.createPrincipal({ handle: 'builder', displayName: 'Builder', kind: 'agent' });
   const peer = store.createPrincipal({ handle: 'peer', displayName: 'Peer', kind: 'agent' });
   const other = store.createPrincipal({ handle: 'other', kind: 'agent' });
@@ -54,6 +53,7 @@ async function messenger(t, dir) {
   const conversation = store.createConversation(peerActor, { members: ['builder'] });
   let n = 0;
   return {
+    close: () => new Promise(resolve => { server.close(resolve); server.closeAllConnections?.(); store.close?.(); }),
     store, requests, tokenFile, otherFile, url: `http://127.0.0.1:${server.address().port}`, conversation,
     send: (body = `hello ${++n}`) => store.sendMessage(peerActor, { conversationId: conversation.id, clientMessageId: `peer-${++n}`, body }),
     history: () => store.listMessages?.(peerActor, conversation.id) ?? null,
@@ -64,7 +64,6 @@ async function messenger(t, dir) {
 let serial = 0;
 async function fixture(t) {
   const dir = mkdtempSync(join(tmpdir(), 'accord-messenger-'));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
   const m = await messenger(t, dir);
   let now = Date.now();
   const s = new Store(join(dir, 'coordinator.sqlite'), { now: () => now, leaderMs: 30000 });
@@ -75,7 +74,8 @@ async function fixture(t) {
   const sc = new Schedules(s, c);
   let principals = { builder: { tokenFile: m.tokenFile }, other: { tokenFile: m.otherFile } };
   const claims = new MessengerClaims(s, c, sc, { directory: dir, remindMs: 600000, config: () => ({ url: m.url, principals }) });
-  t.after(async () => { await claims.close(); c.close(); s.close(); });
+  // One ordered cleanup: Windows cannot remove open SQLite files.
+  t.after(async () => { await claims.close(); c.close(); s.close(); await m.close(); rmSync(dir, { recursive: true, force: true }); });
   const enroll = (label) => ({ id: s.openSession({ id: 'enroller' }, { key: `enroll:${++serial}`, label, harness: 'claude' }, () => `${serial}-secret`).sessionId, role: 'worker' });
   return {
     m, s, c, sc, claims, dir, enroll, admin: { id: 'admin', role: 'admin' },
