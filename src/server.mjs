@@ -5,6 +5,7 @@ import { awarenessRuntime } from './awareness-runtime.mjs';
 import { SessionAwareness } from './session-awareness.mjs';
 import { Overseer } from './overseer.mjs';
 import { Schedules } from './schedules.mjs';
+import { MessengerClaims } from './messenger-claims.mjs';
 import { dirname,join } from 'node:path';
 import { homedir } from 'node:os';
 import { readdirSync } from 'node:fs';
@@ -30,7 +31,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
   requireThat(parsed.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(parsed.hostname) && !parsed.username && !parsed.password,
     'BAD_DRIVER_URL', 'This release supports a loopback HTTP driver only', 400);
   const store = new Store(db, { leaderMs });
-  let collaboration,memory,managers,awareness,overseer,attention,telemetry,schedules;
+  let collaboration,memory,managers,awareness,overseer,attention,telemetry,schedules,messenger;
   try {
     // Synchronous mailbox migrations and config reads can outlast a lease. Finish
     // them before taking leadership; no timer can renew while they block startup.
@@ -44,6 +45,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     overseer=new Overseer(store,awareness,collaboration);
     collaboration.agentRecord=actorId=>awareness.agentRecord(actorId);
     schedules=new Schedules(store,collaboration,{resourceExists:localId=>!!store.db.prepare('SELECT 1 FROM resources WHERE id=?').get(localId)||!!store.binding(localId)||managers.owns(localId)});
+    messenger=new MessengerClaims(store,collaboration,schedules,{directory:dirname(db)});
   } catch (error) {
     attention?.close();
     try { collaboration?.close(); } finally {
@@ -51,6 +53,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     }
     throw error;
   }
+  messenger.start();
   managers.onRunning=row=>{try{collaboration.granted(overseer.actor,{key:`grant:${row.id}`,reservation:row.id,actor:row.actor,resource:row.resource,queuedAt:row.created_at});}catch{/* A notice is a hint. */}};
   const observationRuntime=awarenessRuntime(dirname(db),awareness);
   awareness.lifecycleConfig=()=>observationRuntime.lifecycle();
@@ -421,6 +424,9 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     if(operation==='schedule-cancel')return schedules.cancel(actor,args);
     if(operation==='schedule-pause')return schedules.pause(actor,args);
     if(operation==='topic-publish')return schedules.publish(actor,args);
+    if(operation==='messenger-claim')return messenger.claim(actor,args);
+    if(operation==='messenger-inbox')return messenger.inbox(actor,args);
+    if(operation==='messenger-reply')return messenger.reply(actor,args);
     if(operation==='send'){const r=collaboration.send(actor,args);void collaboration.flush().catch(()=>{});return {...collaboration.sent(actor,r.id),...(r.redirectedTo?{redirectedTo:r.redirectedTo}:{})};}
     if(operation==='inbox'){
       integer(args.waitMs??0,'waitMs',0,3600000);
@@ -659,7 +665,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
   return {
     server, store, reconcile, failed,
     async close() {
-      closed = true; attention.close(); await observationRuntime.close();clearInterval(timer); clearInterval(heartbeat);clearInterval(mailTimer);clearInterval(overseerTimer);clearTimeout(pruneStart);clearInterval(pruneTimer);memory.close();
+      closed = true; attention.close(); await messenger.close(); await observationRuntime.close();clearInterval(timer); clearInterval(heartbeat);clearInterval(mailTimer);clearInterval(overseerTimer);clearTimeout(pruneStart);clearInterval(pruneTimer);memory.close();
       server.closeAllConnections();
       await new Promise(resolve => server.close(resolve));
       while (busy||claimFlights.size||collaboration.sending||monitoring||pruning||managers.busy) await new Promise(resolve => setTimeout(resolve, 10));

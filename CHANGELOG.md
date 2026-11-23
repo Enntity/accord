@@ -25,6 +25,17 @@
   designated overseer may list all schedules and pause or cancel any owner's.
 - New admin op `bridge-unread {ids}` (≤200 delivery ids) reports which are
   still pending or offered, so a bridge never types mail the agent already handled.
+- Messenger identity claims (migration 24): `accord_messenger_claim {principal}`
+  takes over an identity named in `messenger.json`, with its token held in the
+  macOS Keychain or a 0600 file and verified against `/v1/me`. One holder per
+  identity. The claim creates a persistent topic schedule (`messenger:<principal>`,
+  wake) owned by the holder. A watcher peeks the inbox without leasing and publishes
+  the topic when new mail waits. `accord_messenger_inbox` and
+  `accord_messenger_reply` read and answer in-thread, at most once per message, with
+  Accord keeping the lease tokens. Claims follow the holder's successor and end with
+  it. The CLI is `accord messenger claim|release|claims|inbox|reply`. See
+  docs/MESSENGER-CLAIMS.md. The vendored Messenger set adds `client.js` from the same
+  pinned commit.
 
 ## 0.9.0 — 2026-11-22
 
