@@ -10,7 +10,7 @@ import { hash } from "../src/common.mjs";
 import { Collaboration } from "../src/collaboration.mjs";
 import { SessionAwareness } from "../src/session-awareness.mjs";
 import { participant } from "../src/compact.mjs";
-import { harness, link } from "./helpers.mjs";
+import { harness, link, eventually } from "./helpers.mjs";
 import { install } from "../src/installer.mjs";
 import { enrollProfile, bindNativeSession } from "../src/bootstrap.mjs";
 
@@ -197,7 +197,7 @@ test("the agent record carries task, previous addresses and the mailbox binding"
   assert.equal(record.task, "Deploy phase 2");
   assert.deepEqual(record.previous, [f.addr(s1), f.addr(s0)]);
   assert.deepEqual(record.native, { source: "tessera", id: "tile-7" });
-  assert.deepEqual(record.tile, { id: "tile-7", role: "agent" }); // back-compat: a tessera binding reads as an agent link
+  assert.deepEqual(record.tile, { id: "tile-7", role: "agent", current: true }); // a live tessera binding is the tile's agent
   assert.equal(record.host.authority, f.s.authority);
 });
 
@@ -302,4 +302,113 @@ test("an enrollment recorded by 0.8.0 with its client name still replays", (t) =
   s.db.prepare("UPDATE commands SET payload_hash=? WHERE key=?").run(hash(JSON.stringify({ operation: "session.open", body: { ...body, client: "claude" } })), body.key);
   assert.equal(s.openSession({ id: "a" }, { ...body, client: "claude" }, () => "native-secret").sessionId, first.sessionId);
   assert.throws(() => s.openSession({ id: "a" }, body, () => "native-secret"), { code: "KEY_REUSED" });
+});
+
+test("tileAgent follows the binding's successor and falls back to the latest live agent link", (t) => {
+  const f = fixture(t);
+  reportTile(f);
+  const s1 = f.enroll("First"), s2 = f.enroll("Second"), s3 = f.enroll("Third");
+  // A live binding wins outright.
+  f.s.db.prepare("INSERT INTO session_bindings VALUES('tessera','tile-1',?)").run(s1);
+  assert.equal(f.v.tileAgent("tile-1"), s1);
+  // A retired binding follows its successor chain to the live actor.
+  f.s.db.prepare("UPDATE sessions SET retired_at=?,retired_reason='superseded',successor=? WHERE id=?").run(f.s.now(), s2, s1);
+  assert.equal(f.v.tileAgent("tile-1"), s2);
+  // The chain dying without a live actor falls back to agent_tiles, newest link first.
+  f.s.db.prepare("UPDATE sessions SET retired_at=?,retired_reason='closed' WHERE id=?").run(f.s.now(), s2);
+  const later = f.enroll("Late");
+  f.s.db.prepare("INSERT INTO agent_tiles VALUES(?,?,?,?)").run(s3, "tile-1", "agent", f.s.now());
+  f.s.db.prepare("INSERT INTO agent_tiles VALUES(?,?,?,?)").run(later, "tile-1", "agent", f.s.now() + 1);
+  assert.equal(f.v.tileAgent("tile-1"), later);
+  // Nested links never qualify; with no live agent there is no tile agent.
+  f.s.db.prepare("UPDATE agent_tiles SET role='nested' WHERE actor=?").run(later);
+  f.s.db.prepare("UPDATE sessions SET retired_at=? WHERE id=?").run(f.s.now(), s3);
+  assert.equal(f.v.tileAgent("tile-1"), null);
+  // agentRecord flags the actor the rule picks as tile.current.
+  f.s.db.prepare("UPDATE agent_tiles SET role='agent' WHERE actor=?").run(later);
+  assert.equal(f.v.agentRecord(later).tile.current, true);
+  const other = f.enroll("Other");
+  f.s.db.prepare("INSERT INTO agent_tiles VALUES(?,?,?,?)").run(other, "tile-1", "agent", f.s.now() - 1);
+  assert.equal(f.v.agentRecord(other).tile.current, undefined);
+});
+
+test("bridge-inbox serves a tile's live agent mail plus the observation inbox, deduplicated", async (t) => {
+  const h = await harness();
+  t.after(() => h.close());
+  const installed = install({ home: join(h.data, "home"), data: h.data });
+  const first = await enrollProfile(installed.profile, { label: "first agent", harness: "mcp", client: "claude" });
+  const second = await enrollProfile(installed.profile, { label: "second agent", harness: "mcp", client: "claude" });
+  const admin = h.client("admin"), other = h.client("agent-a");
+  const authority = (await other.host()).authority;
+  const s1 = first.session.sessionId, s2 = second.session.sessionId;
+  await admin.collaborate("session-report", { key: "tile", source: "tessera", externalId: "tile-b", title: "Tile", state: "idle" });
+  await admin.collaborate("session-bind", { key: "b1", source: "tessera", externalId: "tile-b", actor: s1 });
+  await admin.collaborate("session-link-tile", { key: "l1", actor: s1, tile: "tile-b", role: "agent" });
+  await other.send(`${authority}/${s1}`, "mail for the tile agent", { key: "m1" });
+  await eventually(async () => (await admin.collaborate("bridge-inbox", { source: "tessera" })).deliveries.length === 1);
+  const inbox = await admin.collaborate("bridge-inbox", { source: "tessera" });
+  assert.equal(inbox.deliveries.length, 1);
+  assert.equal(inbox.deliveries[0].text, "mail for the tile agent");
+  assert.equal(inbox.deliveries[0].externalId, "tile-b");
+  // The observation's own inbox is merged without duplicates.
+  const view = await admin.collaborate("sessions", { query: "tile" });
+  const tileViewId = view.sessions.find((s) => s.source === "tessera").id;
+  await other.send(`${authority}/${tileViewId}`, "mail for the tile itself", { key: "m2" });
+  await eventually(async () => (await admin.collaborate("bridge-inbox", { source: "tessera" })).deliveries.length === 2);
+  // Rebind the tile to a new live actor: the old one retires as its successor,
+  // and mail addressed to it surfaces through the tile agent rule.
+  await admin.collaborate("session-link-tile", { key: "l2", actor: s2, tile: "tile-b", role: "agent" });
+  await admin.collaborate("session-bind", { key: "b2", source: "tessera", externalId: "tile-b", actor: s2 });
+  await other.send(`${authority}/${s2}`, "mail for the successor", { key: "m3" });
+  await eventually(async () => (await admin.collaborate("bridge-inbox", { source: "tessera" })).deliveries.length === 3);
+});
+
+test("bridge-unread reports which deliveries are still unread", async (t) => {
+  const h = await harness();
+  t.after(() => h.close());
+  const admin = h.client("admin"), a = h.client("agent-a"), b = h.client("agent-b");
+  const bb = (await b.bootstrap()).address;
+  await a.send(bb, "one", { key: "u1" });
+  const delivery = await eventually(async () => (await b.inbox()).messages[0]);
+  let unread = await admin.collaborate("bridge-unread", { ids: [delivery.deliveryId, "nope", "also-nope"] });
+  assert.deepEqual(unread.unread, [delivery.deliveryId]);
+  await b.read(delivery.deliveryId);
+  unread = await admin.collaborate("bridge-unread", { ids: [delivery.deliveryId] });
+  assert.deepEqual(unread.unread, []);
+  await assert.rejects(b.collaborate("bridge-unread", { ids: [] }), (e) => e.code === "FORBIDDEN");
+});
+
+test("TESSERA_TILE_AGENT mismatches enroll as nested without the tessera binding", async (t) => {
+  const h = await harness();
+  t.after(() => h.close());
+  const installed = install({ home: join(h.data, "home"), data: h.data });
+  const withFlavor = async (flavor, fn) => {
+    const savedTile = process.env.TESSERA_TILE_ID, savedFlavor = process.env.TESSERA_TILE_AGENT;
+    process.env.TESSERA_TILE_ID = "tile-flav"; process.env.TESSERA_TILE_AGENT = flavor;
+    try { return await fn(); } finally {
+      if (savedTile === undefined) delete process.env.TESSERA_TILE_ID; else process.env.TESSERA_TILE_ID = savedTile;
+      if (savedFlavor === undefined) delete process.env.TESSERA_TILE_AGENT; else process.env.TESSERA_TILE_AGENT = savedFlavor;
+    }
+  };
+  const store = db(h);
+  // A codex client in a devin tile: nested, and never the tessera binding.
+  const mismatch = await withFlavor("devin", () =>
+    enrollProfile(installed.profile, { label: "scratch codex", harness: "mcp", client: "codex-mcp-client", nativeIdentity: { source: "tessera", id: "tile-flav" } }));
+  assert.equal(store.prepare("SELECT role FROM agent_tiles WHERE actor=?").get(mismatch.session.sessionId).role, "nested");
+  assert.equal(store.prepare("SELECT 1 FROM session_bindings WHERE source='tessera' AND actor=?").get(mismatch.session.sessionId), undefined);
+  // An rmcp (Devin) client in a devin tile: the tile's agent, tessera binding kept.
+  const match = await withFlavor("devin", () =>
+    enrollProfile(installed.profile, { label: "devin bridge", harness: "mcp", client: "rmcp", nativeIdentity: { source: "tessera", id: "tile-flav" } }));
+  assert.equal(store.prepare("SELECT role FROM agent_tiles WHERE actor=?").get(match.session.sessionId).role, "agent");
+  assert.equal(store.prepare("SELECT actor FROM session_bindings WHERE source='tessera' AND external_id='tile-flav'").get().actor, match.session.sessionId);
+  // Unset flavor keeps today's behavior: the next codex client is agent and binds.
+  const unset = await withTile("tile-unset", () =>
+    enrollProfile(installed.profile, { label: "old tile", harness: "mcp", client: "codex", nativeIdentity: { source: "tessera", id: "tile-unset" } }));
+  assert.equal(store.prepare("SELECT role FROM agent_tiles WHERE actor=?").get(unset.session.sessionId).role, "agent");
+  assert.equal(store.prepare("SELECT actor FROM session_bindings WHERE source='tessera' AND external_id='tile-unset'").get().actor, unset.session.sessionId);
+  // A shell tile accepts no agent family: even a devin client nests.
+  const shell = await withFlavor("shell", () =>
+    enrollProfile(installed.profile, { label: "in shell", harness: "mcp", client: "rmcp", nativeIdentity: { source: "tessera", id: "tile-flav" } }));
+  assert.equal(store.prepare("SELECT role FROM agent_tiles WHERE actor=?").get(shell.session.sessionId).role, "nested");
+  store.close();
 });

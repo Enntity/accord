@@ -124,3 +124,27 @@ test('jobs follow remote reservations and keep the authenticated holder boundary
  assert((await ca.collaborate('jobs',{},bb)).jobs.some(x=>x.id===j.id&&x.state==='done'));
  await ca.release(r.id,{host:bb});
 });
+
+test('a remote deliver to a retired recipient follows its live successor on the receiving host',async t=>{
+  const a=await harness(),b=await harness();t.after(async()=>{await a.close();await b.close();});
+  const {aa}=await link(a,b);
+  const {install}=await import('../src/installer.mjs');
+  const {enrollProfile}=await import('../src/bootstrap.mjs');
+  const {join}=await import('node:path');
+  const installed=install({home:join(a.data,'home'),data:a.data});
+  const first=await enrollProfile(installed.profile,{label:'first',harness:'mcp',client:'claude'});
+  const second=await enrollProfile(installed.profile,{label:'second',harness:'mcp',client:'claude'});
+  const s1=first.session.sessionId,s2=second.session.sessionId;
+  const admin=a.client('admin'),sender=b.client('agent-b');
+  // Retire s1 with s2 as its successor through a mailbox rebind.
+  await admin.collaborate('session-bind',{key:'rb1',source:'claude',externalId:'conv-1',actor:s1});
+  await admin.collaborate('session-bind',{key:'rb2',source:'claude',externalId:'conv-1',actor:s2});
+  await sender.send(`${aa}/${s1}`,'queued before the retirement',{key:'cross-ret'});
+  const inbox=await eventually(async()=>{const m=(await second.inbox()).messages;return m.length&&m[0];});
+  assert.equal(inbox.text,'queued before the retirement');
+  // Without a live successor the receiving host still refuses permanently.
+  const gone=await enrollProfile(installed.profile,{label:'gone',harness:'mcp',client:'claude'});
+  await admin.collaborate('lifecycle-retire',{key:'r9',session:gone.session.sessionId,reason:'operator'});
+  const sent=await sender.send(`${aa}/${gone.session.sessionId}`,'nowhere',{key:'cross-dead'});
+  await eventually(async()=>(await sender.sent(sent.id)).state==='failed');
+});

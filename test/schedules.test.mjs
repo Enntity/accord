@@ -262,7 +262,7 @@ test("an event logged while the server is down still fires after restart", (t) =
   assert.equal(s2.db.prepare("SELECT fired_count FROM schedules WHERE id=?").get(sched.id).fired_count, 1);
 });
 
-test("a retired target at fire time marks the schedule failed", (t) => {
+test("a retired target at fire time ends the schedule as target-retired", (t) => {
   const f = fixture(t);
   const session = f.enroll("Doomed");
   const sched = f.sc.create(f.a, { key: "doom", text: "hello", inMs: 60000, to: addr(f, session) });
@@ -270,8 +270,8 @@ test("a retired target at fire time marks the schedule failed", (t) => {
   f.advance(61000);
   f.sc.tick();
   const row = f.s.db.prepare("SELECT * FROM schedules WHERE id=?").get(sched.id);
-  assert.equal(row.state, "failed");
-  assert.equal(row.last_error, "RECIPIENT_RETIRED");
+  assert.equal(row.state, "ended");
+  assert.equal(row.ended_reason, "target-retired");
   assert.equal(f.outbox().length, 0);
 });
 
@@ -412,4 +412,184 @@ test("a schedule on B delivers to a linked host A from B/accord-scheduler with s
   assert.equal(mail.from, `${bb}/accord-scheduler`);
   assert.equal(mail.scheduledBy, `${bb}/agent-b`);
   assert.equal(mail.scheduleId, sched.id);
+});
+
+test("persistent schedules never expire, reject expiresInMs and still count toward the cap", (t) => {
+  const f = fixture(t);
+  const sched = f.sc.create(f.a, { key: "perm", text: "forever", everyMs: 60000, persistent: true });
+  assert.equal(sched.persistent, true);
+  assert.equal(sched.expiresAt, undefined);
+  assert.throws(() => f.sc.create(f.a, { key: "perm2", text: "x", inMs: 60000, persistent: true, expiresInMs: 60000 }), (e) => e.code === 'INVALID_INPUT');
+  // Far past the old 30-day ceiling it still fires.
+  f.advance(40 * 86400000);
+  f.sc.tick();
+  assert.equal(f.s.db.prepare("SELECT state FROM schedules WHERE id=?").get(sched.id).state, "active");
+  assert.equal(f.outbox().length >= 1, true);
+  // Still capped: fill the remaining 49 slots, the 51st is refused.
+  for (let i = 0; i < 49; i++) f.sc.create(f.a, { key: `pc${i}`, text: "x", inMs: 60000, persistent: true });
+  assert.throws(() => f.sc.create(f.a, { key: "pc-over", text: "x", inMs: 60000 }), (e) => e.code === 'SCHEDULE_LIMIT');
+});
+
+test("a retired target with a live successor is retargeted and still gets the fire", (t) => {
+  const f = fixture(t);
+  const old = f.enroll("Old agent"), next = f.enroll("New agent");
+  const sched = f.sc.create(f.a, { key: "ret-t", text: "follow me", inMs: 60000, to: addr(f, old) });
+  f.s.db.prepare("UPDATE sessions SET retired_at=?,retired_reason='superseded',successor=? WHERE id=?").run(f.now(), next, old);
+  f.advance(61000);
+  f.sc.tick();
+  const row = f.s.db.prepare("SELECT * FROM schedules WHERE id=?").get(sched.id);
+  assert.equal(row.state, "done"); // a one-shot fires its retargeted successor once
+  assert.equal(row.target, addr(f, next));
+  assert.equal(row.fired_count, 1);
+  assert.equal(f.outbox()[0].envelope.to, addr(f, next));
+});
+
+test("a retired target without a successor ends as target-retired, not failed, and is pruned after 72h", (t) => {
+  const f = fixture(t);
+  const session = f.enroll("Doomed");
+  const sched = f.sc.create(f.a, { key: "ret-none", text: "hello", inMs: 60000, to: addr(f, session) });
+  f.s.endSession({ id: session, role: "worker" }, session, { key: "close" });
+  f.advance(61000);
+  f.sc.tick();
+  const row = f.s.db.prepare("SELECT * FROM schedules WHERE id=?").get(sched.id);
+  assert.equal(row.state, "ended");
+  assert.equal(row.ended_reason, "target-retired");
+  assert.equal(row.expires_at, f.now() + 72 * 3600000);
+  assert.equal(f.outbox().length, 0);
+  const kinds = f.s.db.prepare("SELECT kind FROM events WHERE kind LIKE 'schedule.%'").all().map((r) => r.kind);
+  assert.ok(kinds.includes("schedule.ended"));
+  assert.ok(!kinds.includes("schedule.failed"));
+  // The row lingers for inspection, then the tick deletes it.
+  f.advance(71 * 3600000);
+  f.sc.tick();
+  assert.ok(f.s.db.prepare("SELECT 1 FROM schedules WHERE id=?").get(sched.id));
+  f.advance(3600001);
+  f.sc.tick();
+  assert.equal(f.s.db.prepare("SELECT 1 FROM schedules WHERE id=?").get(sched.id), undefined);
+});
+
+test("interval wakes coalesce while the previous fire is unread, then resume after a read", (t) => {
+  const f = fixture(t);
+  const target = f.enroll("Busy");
+  f.c.announce({ id: target, role: "worker" }, { key: "ann", label: "busy", activity: "working" });
+  const sched = f.sc.create(f.a, { key: "coal-i", text: "wake", everyMs: 60000, to: addr(f, target) });
+  f.advance(61000);
+  f.sc.tick();
+  assert.equal(f.outbox().length, 1);
+  f.c.deliver(f.outbox()[0].envelope);
+  // The target never reads: the next fire is skipped and the cadence advances.
+  f.advance(61000);
+  f.sc.tick();
+  assert.equal(f.outbox().length, 1);
+  assert.equal(f.s.db.prepare("SELECT fired_count FROM schedules WHERE id=?").get(sched.id).fired_count, 1);
+  const delivery = f.c.inbox({ id: target, role: "worker" }).messages[0];
+  f.c.read({ id: target, role: "worker" }, { deliveryId: delivery.deliveryId });
+  // Read now: the following due tick sends.
+  f.advance(61000);
+  f.sc.tick();
+  assert.equal(f.outbox().length, 2);
+  assert.equal(f.s.db.prepare("SELECT fired_count FROM schedules WHERE id=?").get(sched.id).fired_count, 2);
+});
+
+test("pause and resume across trigger kinds; paused rows ignore events", (t) => {
+  const f = fixture(t);
+  const once = f.sc.create(f.a, { key: "p-at", text: "later", inMs: 60000 });
+  const interval = f.sc.create(f.a, { key: "p-every", text: "beat", everyMs: 60000 });
+  f.s.db.prepare("INSERT INTO resources(id) VALUES('gpu0')").run();
+  const evt = f.sc.create(f.a, { key: "p-ev", text: "event", on: { event: "reservation", resource: "gpu0" } });
+  for (const s of [once, interval, evt]) assert.equal(f.sc.pause(f.a, { id: s.id, paused: true }).state, "paused");
+  // A due one-shot does not fire while paused; events accumulate nothing.
+  f.advance(61000);
+  f.s.emit("claim.active", { claim: "cx", resource: "gpu0" });
+  f.sc.tick();
+  assert.equal(f.outbox().length, 0);
+  assert.equal(f.s.db.prepare("SELECT pending_events FROM schedules WHERE id=?").get(evt.id).pending_events, 0);
+  // Resume: interval re-arms one period out, a passed one-shot is due now,
+  // the event trigger waits for a fresh event.
+  assert.equal(f.sc.pause(f.a, { id: interval.id, paused: false }).nextAt, f.now() + 60000);
+  assert.equal(f.sc.pause(f.a, { id: once.id, paused: false }).state, "active");
+  assert.equal(f.s.db.prepare("SELECT next_at FROM schedules WHERE id=?").get(once.id).next_at, f.now());
+  assert.equal(f.sc.pause(f.a, { id: evt.id, paused: false }).nextAt, undefined);
+  f.sc.tick();
+  assert.equal(f.outbox().length, 1); // only the one-shot fired
+  f.advance(60000);
+  f.sc.tick();
+  assert.equal(f.outbox().length, 2); // the interval fired
+  f.s.emit("claim.released", { claim: "cx", resource: "gpu0" });
+  f.sc.tick();
+  assert.equal(f.outbox().length, 3);
+});
+
+test("the overseer lists all, pauses and cancels other owners' schedules; a stranger cannot", (t) => {
+  const f = fixture(t);
+  const overseer = f.enroll("Overseer");
+  f.s.db.prepare("INSERT OR REPLACE INTO meta VALUES('overseer_address',?)").run(addr(f, overseer));
+  const sched = f.sc.create(f.b, { key: "ov", text: "watched", everyMs: 60000 });
+  const o = { id: overseer, role: "worker" };
+  assert.equal(f.sc.list(o, { all: true }).schedules.length, 1);
+  assert.equal(f.sc.pause(o, { id: sched.id, paused: true }).state, "paused");
+  assert.throws(() => f.sc.list(f.a, { all: true }), (e) => e.code === 'FORBIDDEN');
+  assert.throws(() => f.sc.pause(f.a, { id: sched.id, paused: true }), (e) => e.code === 'NOT_OWNER');
+  assert.throws(() => f.sc.cancel(f.a, { id: sched.id }), (e) => e.code === 'NOT_OWNER');
+  assert.equal(f.sc.cancel(o, { id: sched.id }).state, "cancelled");
+});
+
+test("ended rows keep 72h of history in every end state, then the tick prunes them", (t) => {
+  const f = fixture(t);
+  const retention = f.now() + 72 * 3600000;
+  const cancelled = f.sc.create(f.a, { key: "e-c", text: "x", inMs: 60000 });
+  f.sc.cancel(f.a, { id: cancelled.id });
+  const done = f.sc.create(f.a, { key: "e-d", text: "x", inMs: 60000 });
+  const ghost = f.enroll("Ghost");
+  const failing = f.sc.create(f.b, { key: "e-f", text: "x", inMs: 60000, to: addr(f, ghost) });
+  f.s.db.prepare("DELETE FROM sessions WHERE id=?").run(ghost); // unknown at fire time
+  const doomed = f.enroll("Doomed2");
+  const targetRetired = f.sc.create(f.a, { key: "e-t", text: "x", inMs: 60000, to: addr(f, doomed) });
+  const ownerDoomed = f.enroll("Leaving2");
+  const ownerRetired = f.sc.create({ id: ownerDoomed, role: "worker" }, { key: "e-o", text: "x", inMs: 60000 });
+  f.s.endSession({ id: doomed, role: "worker" }, doomed, { key: "close" });
+  f.s.endSession({ id: ownerDoomed, role: "worker" }, ownerDoomed, { key: "bye" });
+  const expiring = f.sc.create(f.a, { key: "e-x", text: "x", inMs: 30000, expiresInMs: 60000 });
+  f.advance(61000);
+  f.sc.tick();
+  const states = {};
+  for (const [name, id] of Object.entries({ cancelled: cancelled.id, done: done.id, failed: failing.id, ended: targetRetired.id, "owner-retired": ownerRetired.id, expired: expiring.id })) {
+    const row = f.s.db.prepare("SELECT state,expires_at FROM schedules WHERE id=?").get(id);
+    states[name] = row.state;
+    // cancelled ends before the 61 s advance; the rest end inside the tick.
+    assert.equal(row.expires_at, name === "cancelled" ? retention : retention + 61000, name);
+  }
+  assert.deepEqual(states, { cancelled: "cancelled", done: "done", failed: "failed", ended: "ended", "owner-retired": "cancelled", expired: "expired" });
+  f.advance(72 * 3600000 + 1);
+  f.sc.tick();
+  assert.equal(f.s.db.prepare("SELECT count(*) n FROM schedules").get().n, 0);
+});
+
+test("a paused non-persistent schedule still expires on schedule", (t) => {
+  const f = fixture(t);
+  const sched = f.sc.create(f.a, { key: "px", text: "x", inMs: 60000, expiresInMs: 120000 });
+  f.sc.pause(f.a, { id: sched.id, paused: true });
+  f.advance(130000);
+  f.sc.tick();
+  assert.equal(f.s.db.prepare("SELECT state FROM schedules WHERE id=?").get(sched.id).state, "expired");
+});
+
+test("a send to a retired address with a live successor lands there with redirectedTo", async (t) => {
+  const f = fixture(t);
+  const old = f.enroll("Old"), next = f.enroll("Next");
+  f.c.announce({ id: next, role: "worker" }, { key: "ann", label: "next", activity: "work" });
+  f.s.db.prepare("UPDATE sessions SET retired_at=?,retired_reason='superseded',successor=? WHERE id=?").run(f.now(), next, old);
+  const sent = f.c.send(f.a, { key: "r1", to: addr(f, old), text: "still there?" });
+  assert.equal(sent.redirectedTo, addr(f, next));
+  await f.c.flush();
+  const inbox = f.c.inbox({ id: next, role: "worker" });
+  assert.equal(inbox.messages.length, 1);
+  assert.equal(inbox.messages[0].text, "still there?");
+});
+
+test("a send to a retired address without a successor still fails RECIPIENT_RETIRED", (t) => {
+  const f = fixture(t);
+  const gone = f.enroll("Gone");
+  f.s.endSession({ id: gone, role: "worker" }, gone, { key: "close" });
+  assert.throws(() => f.c.send(f.a, { key: "r2", to: addr(f, gone), text: "hi" }), (e) => e.code === 'RECIPIENT_RETIRED');
 });

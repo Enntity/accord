@@ -225,7 +225,7 @@ test("a dead transcript rescan does not reassert working; fresh transcript activ
   assert.equal(f.events("session.revived").length, 1);
 });
 
-test("rebind sets the successor; sends to the retired address fail with RECIPIENT_RETIRED; the new actor reads old mail", async (t) => {
+test("rebind sets the successor; sends to the retired address redirect to the successor; the new actor reads old mail", async (t) => {
   const f = fixture(t),
     oldId = f.enroll("Old agent"),
     newId = f.enroll("New agent");
@@ -244,10 +244,11 @@ test("rebind sets the successor; sends to the retired address fail with RECIPIEN
   assert.equal(f.v.public(f.v.row(oldId)).successor, `${f.s.authority}/${newId}`);
   // Unread mail addressed to the retired actor is visible to its successor.
   assert.equal((await f.c.inbox({ id: newId })).messages.some((m) => m.text === "old mail"), true);
-  assert.throws(
-    () => f.c.send(f.b, { key: "m:2", to: `${f.s.authority}/${oldId}`, text: "too late" }),
-    (e) => e.code === "RECIPIENT_RETIRED" && e.successor === `${f.s.authority}/${newId}`,
-  );
+  // Mail addressed to the retired actor follows the live successor.
+  const sent = f.c.send(f.b, { key: "m:2", to: `${f.s.authority}/${oldId}`, text: "too late" });
+  assert.equal(sent.redirectedTo, `${f.s.authority}/${newId}`);
+  await f.c.flush();
+  assert.equal((await f.c.inbox({ id: newId })).messages.some((m) => m.text === "too late"), true);
 });
 
 test("an authenticated heartbeat revives a silence-retired session; a closed one stays retired; no claim reactivates", (t) => {

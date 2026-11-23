@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased
+
+- Tile agent resolution: `bridge-inbox` for `tessera` observations now serves
+  the tile's live agent — the `tessera:<tile>` binding's actor followed
+  through its successor chain (≤10 hops), falling back to the most recently
+  linked live agent-role actor — plus the observation's own inbox,
+  deduplicated by delivery id. `agentRecord.tile` gains `current: true` on the
+  chosen actor. Nested actors never qualify.
+- Nested enrollment gating: an MCP enrollment reads `TESSERA_TILE_AGENT` and
+  links as `agent` only when its client family matches the tile's flavor;
+  a mismatch links as `nested` and never binds `tessera:<tile>`. Unset keeps
+  the previous behavior.
+- Sends to a retired recipient with a live successor are delivered there with
+  `redirectedTo` in the result; the receiving host applies the same rule to
+  remote envelopes. With no live successor the send still fails
+  `RECIPIENT_RETIRED`.
+- Schedules: `persistent: true` never expires (refused with `expiresInMs`,
+  still counts toward the per-owner cap); a retired target follows a live
+  successor or ends `target-retired` (no `schedule.failed`); an interval fire
+  whose previous message is still unread is skipped instead of stacking; new
+  `schedule-pause {id, paused}` suspends and re-arms any trigger kind; rows
+  leaving active/paused are retained 72 hours then pruned by the tick; the
+  designated overseer may list all schedules and pause or cancel any owner's.
+- New admin op `bridge-unread {ids}` (≤200 delivery ids) reports which are
+  still pending or offered, so a bridge never types mail the agent already handled.
+
 ## 0.9.0 — 2026-11-22
 
 - Titles now come from their origin. The agent record's `title` is the linked
