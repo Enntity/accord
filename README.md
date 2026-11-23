@@ -180,6 +180,7 @@ Shell scripts can use `accord run -- COMMAND`, or commands such as `accord find`
 
 - [Install options and how joining works](docs/BOOTSTRAP.md)
 - [Message delivery and wakes](docs/MESSAGE-DELIVERY.md)
+- [Messenger identity claims](docs/MESSENGER-CLAIMS.md)
 - [The web board](docs/WEB.md)
 - [Sessions, search, jobs and the overseer](docs/SESSION-BACKPLANE.md)
 - [Host telemetry](docs/telemetry.md)

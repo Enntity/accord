@@ -223,7 +223,7 @@ test("an upgrade still copies given titles into titles rows, now unread", (t) =>
     VALUES('v1','a','agent','observed','working','','',0,1,1,1,1,'f','', 'extractive',1,NULL,0,'Old peer name','admin',7)`).run();
   seed.close();
   const old = new DatabaseSync(file);
-  old.exec("ALTER TABLE sessions DROP COLUMN client; DROP TABLE agent_tiles; DROP TABLE titles; ALTER TABLE session_views DROP COLUMN rename; ALTER TABLE session_views DROP COLUMN rename_reason; DROP TABLE rename_requests; DELETE FROM migrations WHERE version>=22");
+  old.exec("ALTER TABLE sessions DROP COLUMN client; DROP TABLE agent_tiles; DROP TABLE titles; ALTER TABLE session_views DROP COLUMN rename; ALTER TABLE session_views DROP COLUMN rename_reason; DROP TABLE rename_requests; DROP TABLE messenger_claims; DROP TABLE messenger_leases; DELETE FROM migrations WHERE version>=22");
   old.close();
   const s = new Store(file);
   t.after(() => { s.close(); rmSync(dir, { recursive: true, force: true }); });
