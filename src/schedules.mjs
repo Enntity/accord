@@ -48,7 +48,7 @@ export class Schedules {
     const trigger = JSON.parse(row.trigger);
     return {
       id: row.id, state: row.state, owner: row.owner, ownerLabel: row.owner_label ?? undefined,
-      to: row.target, kind: row.kind, delivery: row.delivery, trigger: triggerSummary(trigger),
+      to: row.target, kind: row.kind, delivery: row.delivery, trigger: triggerSummary(trigger), text: row.text,
       nextAt: row.next_at ?? undefined, firedCount: row.fired_count,
       pendingEvents: row.pending_events || undefined,
       ...(row.expires_at === Number.MAX_SAFE_INTEGER ? { persistent: true } : { expiresAt: row.expires_at }),

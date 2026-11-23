@@ -49,6 +49,7 @@ test("create, list and cancel; owner-only view with admin all", (t) => {
   assert.equal(first.state, "active");
   assert.equal(first.to, addr(f, "a"));
   assert.equal(first.nextAt, f.now() + 60000);
+  assert.equal(first.text, "check later");
   const second = f.sc.create(f.b, { key: "k2", text: "b's", inMs: 60000 });
   assert.deepEqual(f.sc.list(f.a).schedules.map((s) => s.id), [first.id]);
   assert.equal(f.sc.list(f.admin, { all: true }).schedules.length, 2);
